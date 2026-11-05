@@ -1,15 +1,15 @@
 # Changelog
 
-## 0.1.4
+## 0.1.5
 
 ### Fixes
 
-- **main:** read messages sent during a turn before a ticket ends (`cae78c8`)
-- **main:** fail over to another provider when a model hits a limit (`9da6533`)
-- **main:** suggest the thinking level of the model a turn runs on (`c4f20b1`)
-- **main:** rate local models up to 40b as small, not mid-tier (`f947fa2`)
+- **manifest:** add the chinese name, description and safety notes (`0fbf1fd`)
 
 ### Tests
 
-- cover recheck turns, provider failover and per-model thinking (`82cd9fd`)
-- cover the tier of small local models (`9cedfef`)
+- cover the chinese texts and the apache-2.0 license (`67468c6`)
+
+### Chores
+
+- license the plugin under apache-2.0 (`e068051`)
