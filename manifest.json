@@ -2,7 +2,7 @@
 	"schemaVersion": 1,
 	"id": "eskwisit.llm-superagent",
 	"name": "LLM Superagent",
-	"version": "0.1.0",
+	"version": "0.1.4",
 	"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
 	"author": "eskwisit",
 	"license": "MIT",
@@ -20,7 +20,7 @@
 		}
 	},
 	"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and the code, research, analysis and review workers can run shell commands, with the permissions PI-Desktop grants sub-agents. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings.",
-	"changelog": "First release: an orchestrator that turns your requests into tickets and runs each one on a worker sub-agent, on the model from your list best suited to its type of task.",
+	"changelog": "Workers now read messages you send while they run before a ticket ends, limits fail over to another provider, and thinking levels and local model choices are fixed.",
 	"contributes": {
 		"skills": [
 			"skills/llm-superagent.md"

@@ -29,7 +29,7 @@ ticket + mandate ─► assignment ─► turns ─► report ─► handoff (re
 | **Mandate** | Immutable: strength, scope, policy version and matched rules. It is checked again before an ended ticket resumes. |
 | **Ticket** | Open → ended (completed, dropped or stopped). Stages put what needs you first. |
 | **Assignment, turns** | One worker session on one model. Each sub-agent run is a turn that ends with a report. |
-| **Subscriptions** | Your replies on a ticket's thread reach its worker without a new Eval. Workers hand back what is not theirs, and unread messages are released when a ticket ends. |
+| **Subscriptions** | Your replies on a ticket's thread reach its worker without a new Eval. A message you send while a worker runs is read in a recheck turn before the ticket can end. Workers hand back what is not theirs, and unread messages are released when a person stops a ticket. |
 | **Report, attention** | `progress`, `waiting`, `ready`, `blocked`, `failed` or `dropped`, plus at most one question for you. |
 | **Replies** | Checked by purpose (result, attention or answer), at most 100 words, never sent twice. |
 | **Slots, recovery** | 3 concurrent workers plus one slot kept for your messages. Retries, status requests, notes, and recovery of turns cut off by a restart. |
@@ -58,7 +58,8 @@ Requirements adjust the choice:
 - `prefer` / `avoid`.
 
 Every pick explains itself and comes with fallbacks. **When a model hits a limit** (rate limit,
-quota, context window, overload), the ticket fails over to its next model and records it. If
+quota, context window, overload), the ticket fails over to its next model, on another provider
+first since limits are per account, with that model's own thinking level. If
 no model is enabled for sub-agents, workers run on the session model.
 
 ## Usage
