@@ -119,4 +119,4 @@ PI-Desktop with the chat as its Source. All prompt text in this plugin is origin
 
 ## License
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE)

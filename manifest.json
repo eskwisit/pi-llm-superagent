@@ -5,7 +5,7 @@
 	"version": "0.1.4",
 	"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
 	"author": "eskwisit",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"homepage": "https://github.com/eskwisit/pi-llm-superagent",
 	"repository": "https://github.com/eskwisit/pi-llm-superagent",
 	"categories": [
