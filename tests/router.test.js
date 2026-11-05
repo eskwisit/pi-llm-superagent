@@ -20,6 +20,7 @@ const LIST = [
   m("google/gemini-3.5-flash-lite", ["minimal", "low", "medium", "high"]),
   m("mistral/codestral-large", ["off"]),
   m("qwen/qwen3-coder-480b", ["off"]),
+  m("ollama/qwen3-coder:30b", ["off"]),
   m("openai/gpt-5", ["low", "medium", "high"]),
   m("openai/gpt-5-mini", ["low", "high"], { availableForSubagents: false }),
 ];
@@ -47,7 +48,7 @@ describe("the user's model list", () => {
   it("uses only models enabled for sub-agents, with provider/model ids", async () => {
     const { pi } = await setup();
     const cfg = await pi.call("superagent_config", {});
-    assert.equal(cfg.models.length, 9);
+    assert.equal(cfg.models.length, 10);
     assert.ok(cfg.models.every((line) => !line.startsWith("openai/gpt-5-mini")));
     assert.match(cfg.models[0], /^anthropic\/claude-opus-5-5: flagship/);
   });
@@ -69,6 +70,8 @@ describe("the user's model list", () => {
     assert.equal(t.inferProfile("x/qwen3-coder-480b").coding, 5);
     assert.equal(t.inferProfile("x/some-reasoner").reasoningModel, true);
     assert.equal(t.inferProfile("x/llama-3.1-8b").tier, "small");
+    assert.equal(t.inferProfile("ollama/qwen3-coder:30b").tier, "small", "a local 30B model is not mid-tier");
+    assert.equal(t.inferProfile("x/llama-3.3-70b").tier, "mid");
     assert.equal(t.inferProfile("x/unknown-model").tier, "mid");
     assert.equal(t.inferProfile("x/model-preview").unstable, true);
     assert.equal(t.familyOf("acme/zeta-2"), "zeta");
@@ -81,7 +84,7 @@ describe("routing by type and requirements", () => {
     const [a, d, s] = await preview([{ type: "analysis" }, { type: "debug" }, { type: "test", requirements: { speed: "high", budget: "low" } }]);
     assert.match(a.model, /opus|gpt-5/);
     assert.match(d.model, /opus|sonnet|coder|codestral/);
-    assert.match(s.model, /haiku|flash/);
+    assert.match(s.model, /haiku|flash|qwen3-coder:30b/, "a small, fast, cheap model");
   });
 
   it("vision keeps only models known to read images; huge context keeps long-context ones", async () => {
@@ -96,6 +99,7 @@ describe("routing by type and requirements", () => {
     const [a, b] = await preview([{ id: "fix", type: "code", requirements: { prefer: ["anthropic/*"] } }, { id: "rev", type: "review", requirements: { differentFrom: ["fix"] } }]);
     assert.equal(t.familyOf(a.model), "claude");
     assert.notEqual(t.familyOf(b.model), "claude");
+    assert.notEqual(b.model, "ollama/qwen3-coder:30b", "a review does not go to a small local model when stronger ones exist");
   });
 
   it("role-model pins win and add the same model through another account as first fallback", async () => {
