@@ -110,6 +110,17 @@ describe("manifest, personas, prompts", () => {
     for (const f of files) assert.ok(!fs.readFileSync(f, "utf8").toLowerCase().includes(needle), path.relative(ROOT, f));
   });
 
+  it("ships english and chinese texts and the apache-2.0 license", () => {
+    for (const lang of ["en", "zh-CN"]) {
+      for (const key of ["name", "description", "safetyNotes"]) assert.ok(manifest.i18n[lang][key], `${lang}.${key}`);
+    }
+    assert.equal(manifest.i18n.en.safetyNotes, manifest.safetyNotes);
+    assert.equal(manifest.i18n.en.description, manifest.description);
+    for (const tool of manifest.contributes.agentTools) assert.ok(manifest.i18n["zh-CN"].safetyNotes.includes(tool.name), tool.name);
+    assert.equal(manifest.license, "Apache-2.0");
+    assert.match(fs.readFileSync(path.join(ROOT, "LICENSE"), "utf8"), /Apache License\s+Version 2\.0/);
+  });
+
   it("ships the three default team sections", () => {
     for (const name of ["communication", "scope", "delivery"]) {
       assert.ok(fs.readFileSync(path.join(ROOT, "prompts", "team", `${name}.md`), "utf8").trim().length > 100, name);
