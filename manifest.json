@@ -1,0 +1,628 @@
+{
+	"schemaVersion": 1,
+	"id": "eskwisit.llm-superagent",
+	"name": "LLM Superagent",
+	"version": "0.1.0",
+	"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
+	"author": "eskwisit",
+	"license": "MIT",
+	"homepage": "https://github.com/eskwisit/pi-llm-superagent",
+	"repository": "https://github.com/eskwisit/pi-llm-superagent",
+	"categories": [
+		"productivity"
+	],
+	"main": "main.js",
+	"i18n": {
+		"en": {
+			"name": "LLM Superagent",
+			"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
+			"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and the code, research, analysis and review workers can run shell commands, with the permissions PI-Desktop grants sub-agents. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings."
+		}
+	},
+	"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and the code, research, analysis and review workers can run shell commands, with the permissions PI-Desktop grants sub-agents. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings.",
+	"changelog": "First release: an orchestrator that turns your requests into tickets and runs each one on a worker sub-agent, on the model from your list best suited to its type of task.",
+	"contributes": {
+		"skills": [
+			"skills/llm-superagent.md"
+		],
+		"agentTools": [
+			{
+				"name": "superagent_config",
+				"description": "LLM Superagent: read or save the policy (accept mode, rules, allowed senders, admission), worker slots, eval timeout, pause, role models per task type, model trait overrides, exclusions and team sections; shows your sub-agent models with their inferred traits. Use only from the llm-superagent skill.",
+				"risk": "low",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"enum": [
+								"get",
+								"set"
+							]
+						},
+						"mode": {
+							"type": "string",
+							"enum": [
+								"off",
+								"observe",
+								"auto"
+							],
+							"description": "set: accept mode for proactive (inferred) candidates"
+						},
+						"rules": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"id": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"enabled": {
+										"type": "boolean"
+									},
+									"instruction": {
+										"type": "string"
+									}
+								}
+							},
+							"description": "set: the full rule list"
+						},
+						"allowed": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "set: sender ids allowed to request work (default [\"person\"])"
+						},
+						"admission": {
+							"type": "object",
+							"description": "set: { listedUnaddressed: inferred|ignore, unlistedAddressed: explicit|inferred|ignore, unlistedUnaddressed: inferred|ignore }"
+						},
+						"maxWorkers": {
+							"type": "integer",
+							"description": "set: concurrent worker turns, 1–8 (default 3); one extra slot is kept for a person's message"
+						},
+						"evalTimeoutSeconds": {
+							"type": "integer",
+							"description": "set: how long a candidate waits for a decision, 30–3600 (default 120)"
+						},
+						"paused": {
+							"type": "boolean",
+							"description": "set: pause or resume processing (evals, launches, replies); messages are still recorded"
+						},
+						"roleModels": {
+							"type": "object",
+							"description": "set: { taskType: [model, fallback, …] } pins; [] removes a pin"
+						},
+						"profiles": {
+							"type": "object",
+							"description": "set: { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision|reasoningModel|unstable: bool, thinking: [levels] } }; null removes"
+						},
+						"exclude": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "set: model id globs never to use"
+						},
+						"include": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "set: exclusion globs to remove"
+						},
+						"notes": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						},
+						"team": {
+							"type": "object",
+							"description": "set: { communication|scope|delivery: text }; \"\" restores the default"
+						},
+						"show": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "get: team sections to return in full"
+						},
+						"clear": {
+							"type": "boolean",
+							"description": "set: forget role models, overrides, exclusions and notes first"
+						}
+					}
+				}
+			},
+			{
+				"name": "superagent_models",
+				"description": "LLM Superagent: preview which of your sub-agent models (with fallbacks and suggested thinking level) a task type and requirements would get. Use only from the llm-superagent skill.",
+				"risk": "low",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"tasks": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"id": {
+										"type": "string"
+									},
+									"type": {
+										"type": "string",
+										"enum": [
+											"code",
+											"debug",
+											"test",
+											"research",
+											"analysis",
+											"review",
+											"docs"
+										]
+									},
+									"requirements": {
+										"type": "object",
+										"description": "Optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids whose model family to avoid], prefer [globs], avoid [globs]"
+									}
+								},
+								"required": [
+									"type"
+								]
+							}
+						},
+						"explain": {
+							"type": "boolean",
+							"description": "Also return the top 5 candidates with scores"
+						}
+					},
+					"required": [
+						"tasks"
+					]
+				}
+			},
+			{
+				"name": "superagent_intake",
+				"description": "LLM Superagent: record a person's chat message as a trigger. A reply on a ticket's thread goes straight to that ticket's worker (follow-up); anything else goes through the gate to Eval and comes back as a candidate card. Use only from the llm-superagent skill.",
+				"risk": "low",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"text": {
+							"type": "string",
+							"description": "The person's message, verbatim"
+						},
+						"addressed": {
+							"type": "boolean",
+							"description": "false when the message is not addressed to you as a request (shared material, an aside, thinking aloud); default true"
+						},
+						"thread": {
+							"type": "string",
+							"description": "Only when the message replies within an existing thread (answers a ticket's question, or follows up on its result): that thread key"
+						}
+					},
+					"required": [
+						"text"
+					]
+				}
+			},
+			{
+				"name": "superagent_route",
+				"description": "LLM Superagent: decide waiting candidates, one item each: accept (new ticket, explicit requests only), attach (to a ticket the message points at), stop (a ticket, at the person's request) or ignore (with a reason). Items are processed independently. Use only from the llm-superagent skill.",
+				"risk": "low",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"decisions": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"kind": {
+										"type": "string",
+										"enum": [
+											"accept",
+											"attach",
+											"stop",
+											"ignore"
+										]
+									},
+									"trigger_id": {
+										"type": "string",
+										"description": "The candidate card's trigger_id (a follow-up's for stop)"
+									},
+									"ticket_id": {
+										"type": "string",
+										"description": "attach and stop: the ticket"
+									},
+									"reason": {
+										"type": "string",
+										"description": "ignore and stop: why, at most 500 characters"
+									},
+									"title": {
+										"type": "string",
+										"description": "accept: a short label of the original request, at most 200 characters; no added requirements"
+									},
+									"name": {
+										"type": "string",
+										"description": "accept: a short English name; it becomes the ticket id"
+									},
+									"acknowledgement": {
+										"type": "string",
+										"description": "accept: one short sentence, at most 100 words, naming the concrete change and intended result, in the person's language"
+									},
+									"note": {
+										"type": "string",
+										"description": "accept and attach: optional routing background or an explicit constraint of the person, at most 30 words; never instructions"
+									},
+									"type": {
+										"type": "string",
+										"enum": [
+											"code",
+											"debug",
+											"test",
+											"research",
+											"analysis",
+											"review",
+											"docs"
+										],
+										"description": "accept: the type of task, which picks the worker and its model"
+									},
+									"requirements": {
+										"type": "object",
+										"description": "Optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids whose model family to avoid], prefer [globs], avoid [globs]"
+									},
+									"scope": {
+										"type": "string",
+										"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
+									}
+								},
+								"required": [
+									"kind",
+									"trigger_id"
+								]
+							}
+						}
+					},
+					"required": [
+						"decisions"
+					]
+				}
+			},
+			{
+				"name": "superagent_eval_decide",
+				"description": "LLM Superagent: record the assessment of a proactive (inferred) candidate against every enabled rule; accept creates a ticket only in auto mode and only with a settled direction and a matched rule. Use only from the llm-superagent skill.",
+				"risk": "low",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"trigger_id": {
+							"type": "string"
+						},
+						"decision": {
+							"type": "string",
+							"enum": [
+								"accept",
+								"ignore",
+								"unavailable"
+							]
+						},
+						"rule_assessments": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"rule_id": {
+										"type": "string"
+									},
+									"matched": {
+										"type": "boolean"
+									},
+									"reason": {
+										"type": "string"
+									}
+								}
+							},
+							"description": "Exactly one entry per enabled rule"
+						},
+						"direction": {
+							"type": "object",
+							"properties": {
+								"implementation_requested": {
+									"type": "boolean"
+								},
+								"target_basis": {
+									"type": "string",
+									"enum": [
+										"specified",
+										"existing-standard",
+										"undetermined"
+									]
+								},
+								"requires_design_decision": {
+									"type": "boolean"
+								},
+								"evidence": {
+									"type": "string"
+								}
+							}
+						},
+						"intent_evidence": {
+							"type": "string",
+							"description": "accept: the three facts (this project, a change is wanted, direction settled) with source quotes"
+						},
+						"reason": {
+							"type": "string"
+						},
+						"title": {
+							"type": "string",
+							"description": "accept: a short label of the original request, at most 200 characters; no added requirements"
+						},
+						"name": {
+							"type": "string",
+							"description": "accept: a short English name; it becomes the ticket id"
+						},
+						"acknowledgement": {
+							"type": "string",
+							"description": "accept: one short sentence, at most 100 words, naming the concrete change and intended result, in the person's language"
+						},
+						"note": {
+							"type": "string",
+							"description": "accept and attach: optional routing background or an explicit constraint of the person, at most 30 words; never instructions"
+						},
+						"type": {
+							"type": "string",
+							"enum": [
+								"code",
+								"debug",
+								"test",
+								"research",
+								"analysis",
+								"review",
+								"docs"
+							],
+							"description": "accept: the type of task, which picks the worker and its model"
+						},
+						"requirements": {
+							"type": "object",
+							"description": "Optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids whose model family to avoid], prefer [globs], avoid [globs]"
+						},
+						"scope": {
+							"type": "string",
+							"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
+						}
+					},
+					"required": [
+						"trigger_id",
+						"decision",
+						"rule_assessments",
+						"direction"
+					]
+				}
+			},
+			{
+				"name": "superagent_reply",
+				"description": "LLM Superagent: clear a message to the person by its purpose before you post it: result (a ready, completed or dropped ticket), attention (the ticket's open question, copied exactly) or answer (a question the worker answered); at most 100 words, never twice. Use only from the llm-superagent skill.",
+				"risk": "low",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"purpose": {
+							"type": "string",
+							"enum": [
+								"result",
+								"attention",
+								"answer"
+							]
+						},
+						"ticket_id": {
+							"type": "string"
+						},
+						"trigger_id": {
+							"type": "string",
+							"description": "answer: the person's question"
+						},
+						"question": {
+							"type": "string",
+							"description": "attention: the ticket's open question, exactly"
+						},
+						"text": {
+							"type": "string",
+							"description": "The message, at most 100 words"
+						}
+					},
+					"required": [
+						"purpose",
+						"text"
+					]
+				}
+			},
+			{
+				"name": "superagent_ticket",
+				"description": "LLM Superagent: list (what needs the person first), read, report (record a worker turn when its sub-agent returns), retry, recover (a turn lost to a restart), status, note, unsubscribe (a thread), requeue (a message to Eval), dismiss (an unavailable decision). Use only from the llm-superagent skill.",
+				"risk": "low",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"enum": [
+								"list",
+								"read",
+								"report",
+								"retry",
+								"recover",
+								"status",
+								"note",
+								"unsubscribe",
+								"requeue",
+								"dismiss"
+							]
+						},
+						"ticket": {
+							"type": "string"
+						},
+						"turn": {
+							"type": "integer",
+							"description": "report: the turn number that returned"
+						},
+						"attempt": {
+							"type": "integer",
+							"description": "report: the launch item's attempt number"
+						},
+						"outcome": {
+							"type": "string",
+							"enum": [
+								"returned",
+								"error"
+							],
+							"description": "report: the sub-agent returned, or failed (error, timeout, limit)"
+						},
+						"error": {
+							"type": "string",
+							"description": "report: the failure text"
+						},
+						"text": {
+							"type": "string",
+							"description": "report: the sub-agent's reply, used only when it wrote no report file. note: one fact from other work, at most 100 words"
+						},
+						"model": {
+							"type": "string",
+							"description": "retry: run on this model instead (a new worker session)"
+						},
+						"thread": {
+							"type": "string",
+							"description": "unsubscribe: the thread key"
+						},
+						"trigger_id": {
+							"type": "string",
+							"description": "requeue: the message"
+						},
+						"decision": {
+							"type": "string",
+							"description": "dismiss: the unavailable decision id"
+						}
+					}
+				}
+			}
+		],
+		"settings": [
+			{
+				"key": "policy",
+				"title": "Policy",
+				"description": "Accept mode (off, observe, auto), rules for proactive work, allowed senders and admission. Edit through the agent (superagent_config) rather than by hand.",
+				"type": "json",
+				"default": {}
+			},
+			{
+				"key": "maxWorkers",
+				"title": "Concurrent workers",
+				"description": "Worker turns running at once (1–8); one extra slot is kept for your messages.",
+				"type": "number",
+				"default": 3
+			},
+			{
+				"key": "evalTimeoutSeconds",
+				"title": "Eval timeout (seconds)",
+				"description": "How long a candidate waits for a decision before it is queued again (30–3600).",
+				"type": "number",
+				"default": 120
+			},
+			{
+				"key": "paused",
+				"title": "Paused",
+				"description": "Pause processing: messages are recorded, nothing is evaluated, launched or sent.",
+				"type": "boolean",
+				"default": false
+			},
+			{
+				"key": "roleModels",
+				"title": "Role models",
+				"description": "Models pinned per task type, { type: [model, fallback, …] }. Types: code, debug, test, research, analysis, review, docs. Empty means picked automatically from your list.",
+				"type": "json",
+				"default": {}
+			},
+			{
+				"key": "modelProfiles",
+				"title": "Model trait overrides",
+				"description": "Corrections to inferred model traits, { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision: bool } }.",
+				"type": "json",
+				"default": {}
+			},
+			{
+				"key": "excludeModels",
+				"title": "Excluded models",
+				"description": "Glob patterns of model ids never used, e.g. [\"*preview*\"].",
+				"type": "json",
+				"default": []
+			},
+			{
+				"key": "modelNotes",
+				"title": "Model notes",
+				"description": "Notes the orchestrator reads before routing, e.g. why a model is excluded.",
+				"type": "json",
+				"default": []
+			},
+			{
+				"key": "communication",
+				"title": "Team section: Communication",
+				"description": "Replaces the default Communication section every worker reads. Empty uses the default.",
+				"type": "string",
+				"default": ""
+			},
+			{
+				"key": "ticketScope",
+				"title": "Team section: Ticket scope",
+				"description": "Replaces the default Ticket scope section. Empty uses the default.",
+				"type": "string",
+				"default": ""
+			},
+			{
+				"key": "delivery",
+				"title": "Team section: Delivery requirements",
+				"description": "Replaces the default Delivery requirements section. Empty uses the default.",
+				"type": "string",
+				"default": ""
+			},
+			{
+				"key": "promptRevision",
+				"title": "Prompt revision",
+				"description": "Counts saves of the team sections; each brief records the revision it was written under.",
+				"type": "number",
+				"default": 0
+			}
+		]
+	},
+	"permissions": [
+		"agent.prompt.inject",
+		"agent.tool.register",
+		"models.list",
+		"fs.read",
+		"fs.write"
+	],
+	"fs": {
+		"read": {
+			"root": "workspace",
+			"scope": [
+				".superagent/**"
+			]
+		},
+		"write": {
+			"root": "workspace",
+			"scope": [
+				".superagent/**"
+			]
+		}
+	},
+	"engines": {
+		"piDesktop": ">=0.9.0"
+	},
+	"activationEvents": [
+		"onStartup"
+	]
+}
