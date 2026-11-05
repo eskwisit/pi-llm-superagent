@@ -195,7 +195,7 @@ function inferProfile(id, desc = "") {
 
   let tier = "mid";
   if (has("nano", "lite", "tiny", "micro") || (size !== null && size <= 4)) tier = "tiny";
-  else if (has("haiku", "flash", "mini", "small", "instant", "air", "fast") || (size !== null && size <= 14)) tier = "small";
+  else if (has("haiku", "flash", "mini", "small", "instant", "air", "fast") || (size !== null && size <= 40)) tier = "small";
   else if (
     has("opus", "ultra", "pro", "max", "large", "o1", "o3", "o4", "r1", "reasoner", "thinking", "k2") ||
     (size !== null && size >= 200) ||
