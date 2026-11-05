@@ -1608,7 +1608,10 @@ async function ticketReport(state, cfg, a, out) {
       : text == null ? `no report at ${turn.report}` : `the report at ${turn.report} has no valid state line`;
     const limit = outcome === "error" && LIMIT.test(reason);
     const transient = outcome === "error" && TRANSIENT.test(reason);
-    const nextModel = t.chain[t.chain.indexOf(t.model) + 1];
+    // limits are per provider account: fail over to another provider first, else to the next model
+    const rest = t.chain.slice(t.chain.indexOf(t.model) + 1);
+    const prov = (id) => str(id).split("/")[0];
+    const nextModel = rest.find((x) => prov(x) !== prov(t.model)) || rest[0];
     if (limit && nextModel) {
       const from = t.model;
       t.model = nextModel;
