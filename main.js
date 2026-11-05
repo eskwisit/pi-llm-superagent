@@ -861,7 +861,8 @@ async function promote(state, cfg, out) {
 
 function launchItem(t, a, turn) {
   return {
-    ticket: t.id, turn: turn.n, attempt: (turn.attempts || 0) + 1, agent: TASK_TYPES[t.type].agent, model: a.model, thinking: t.thinking,
+    ticket: t.id, turn: turn.n, attempt: (turn.attempts || 0) + 1, agent: TASK_TYPES[t.type].agent, model: a.model,
+    thinking: t.thinkingByModel && a.model in t.thinkingByModel ? t.thinkingByModel[a.model] : t.thinking,
     task: `Read your brief at ${turn.brief} in full and follow it.`, report: turn.report,
   };
 }
@@ -1177,6 +1178,8 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
     id, title, type, decisionId: null, mandate, channels: [thread.key], attention: undefined, assignments: [], inputs: [],
     undelivered: [], answers: [], createdAt: now(), updatedAt: now(), origin: { triggerId: ev.primary, triggerIds: ev.triggerIds },
     note, req, model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+    // the suggested thinking level of every model the ticket may run on, so a failover keeps a valid one
+    thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((id) => [id, ctx.profiles.has(id) ? thinkingFor(type, req, ctx.profiles.get(id)) : route.thinking])),
   };
   state.tickets[id] = t;
   for (const trId of [ev.primary, ...ev.triggerIds.filter((x) => x !== ev.primary)]) {
@@ -1717,6 +1720,8 @@ async function superTicket(args) {
         const catalog = await loadCatalog();
         if (!t.chain.includes(model) && !catalog.entries.some((e) => e.id === model)) fail(`${model} is not among your sub-agent models`);
         if (!t.chain.includes(model)) t.chain.splice(t.chain.indexOf(t.model) + 1, 0, model);
+        const entry = catalog.entries.find((e) => e.id === model);
+        if (entry) (t.thinkingByModel ||= {})[model] = thinkingFor(t.type, t.req, profileOf(entry, cfg.profiles));
         t.model = model;
       }
       restartAssignment(state, t, null, "retry");
