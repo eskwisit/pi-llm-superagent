@@ -199,17 +199,32 @@ describe("follow-ups, subscriptions, handback and release", () => {
     assert.match(back.results[0].error, /handed this message back/);
   });
 
-  it("messages the worker never read are released to Eval when the ticket ends", async () => {
+  it("a message sent while a turn ran is read in a recheck turn before the ticket ends", async () => {
     const env = await setup();
     const { intake } = await accepted(env);
-    const f = await env.call("intake", { text: "and the logout too", thread: intake.thread });
+    const f = await env.call("intake", { text: "FYI it only happens on Safari", thread: intake.thread });
     assert.equal(f.path, "follow-up");
     env.report("login-timeout", 1, READY);
     const r = await env.call("ticket", { action: "report", ticket: "login-timeout", turn: 1 });
-    // it reached the ticket while turn 1 ran and was never read: the ready report ends the ticket and releases it
-    assert.equal(r.stage, "ended/completed");
-    assert.ok(r.candidates.some((c) => c.trigger_id === f.trigger_id));
-    assert.equal(r.launch, undefined);
+    assert.equal(r.stage, "working");
+    assert.equal(r.handoff.kind, "none", "no result is announced before the worker read the message");
+    assert.match(r.note, /held/);
+    assert.equal(r.candidates, undefined);
+    await assert.rejects(env.call("reply", { purpose: "result", ticket_id: "login-timeout", text: "done" }), /ready, completed or dropped/);
+    assert.match(get(env.dirs, ".superagent/tickets/login-timeout/turn-2.md"), /\*\*Recheck\.\*\*[\s\S]*\[NEW\][\s\S]*Safari/);
+    env.report("login-timeout", 2, `state: ready\nsummary: Fixed, Safari included.\nhuman_action: none\nacked: ${f.trigger_id}\n---\n`);
+    const r2 = await env.call("ticket", { action: "report", ticket: "login-timeout", turn: 2 });
+    assert.equal(r2.stage, "ended/completed");
+    assert.equal(r2.handoff.kind, "result");
+  });
+
+  it("messages the worker never read are released to Eval when a person stops the ticket", async () => {
+    const env = await setup();
+    const { intake } = await accepted(env);
+    const other = await env.call("intake", { text: "and the logout too", thread: intake.thread });
+    const stopMsg = await env.call("intake", { text: "stop the login work", thread: intake.thread });
+    const st = await env.call("route", { decisions: [{ kind: "stop", trigger_id: stopMsg.trigger_id, ticket_id: "login-timeout" }] });
+    assert.deepEqual(st.candidates.map((c) => c.trigger_id), [other.trigger_id]);
   });
 
   it("an unrelated attached thread is dropped and its messages handed back", async () => {
@@ -250,7 +265,8 @@ describe("worker slots, failures, retry and recovery", () => {
     const { r } = await accepted(env);
     const lim = await env.call("ticket", { action: "report", ticket: "login-timeout", turn: 1, outcome: "error", error: "429 rate limit reached" });
     assert.match(lim.note, /failed over/);
-    assert.notEqual(lim.launch[0].model, r.model);
+    assert.notEqual(lim.launch[0].model.split("/")[0], r.model.split("/")[0], "a limit fails over to another provider first");
+    assert.equal(lim.launch[0].thinking, "high", "the thinking level is the failover model's, not the first model's");
     assert.match(get(env.dirs, ".superagent/tickets/login-timeout/turn-2.md"), /## Recovery note[\s\S]*hit a limit/);
     const n = lim.launch[0].turn;
     for (let i = 1; i < 3; i++) {
