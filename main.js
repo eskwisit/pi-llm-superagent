@@ -574,7 +574,8 @@ function ticketStage(t) {
   if (t.attention) return { stage: "person", action: "answer" };
   const a = latestAssignment(t);
   const report = a && a.report && a.report.state;
-  if (report === "ready") return { stage: "person", action: "review" };
+  const live = a && activeTurn(a);
+  if (report === "ready" && !live) return { stage: "person", action: "review" };
   if ((report === "blocked" || report === "failed") && waitsForPerson(t)) return { stage: "person", action: report };
   if (!a || a.state === "pending") return { stage: "working", action: "queued" };
   const turn = activeTurn(a);
@@ -888,7 +889,9 @@ function buildBrief(state, cfg, t, a, turn) {
   const team = Object.keys(TEAM_KEYS).map((name) => `## ${TEAM_TITLES[name]}\n\n${teamText(cfg, name) || "(none)"}`).join("\n\n");
   const kindNote = turn.kind === "status"
     ? "\n**This is a status turn.** The orchestrator asks where this ticket stands. Report your current state and summary; do not start new work.\n"
-    : turn.kind === "go-on"
+    : turn.kind === "recheck"
+      ? "\n**Recheck.** Your previous turn reported a final state, but the person wrote while it ran and you have not read it. Decide whether the NEW messages change your result: do what they ask within this ticket, or report the same state again if they change nothing.\n"
+      : turn.kind === "go-on"
       ? "\n**Go on.** Your previous turn ended while the work was still in progress. Continue from where it stopped.\n"
       : "";
   return `# Ticket ${t.id} · turn ${turn.n}: ${t.title}
@@ -1560,7 +1563,7 @@ async function superReply(args) {
       : tr ? Object.values(state.tickets).find((x) => state.dispositions[tr.id].fanout.includes(x.id) || x.origin.triggerIds.includes(tr.id)) : null;
     if (purpose === "result") {
       const outcome = t && t.ended && t.ended.outcome;
-      const ready = outcome === "completed" || outcome === "dropped" || (t && liveTicket(t) && latestAssignment(t) && latestAssignment(t).report && latestAssignment(t).report.state === "ready");
+      const ready = outcome === "completed" || outcome === "dropped" || (t && liveTicket(t) && ticketStage(t).action === "review");
       if (!t || !ready) fail("a result needs a ticket that is ready, completed or dropped");
     }
     let id;
@@ -1660,12 +1663,15 @@ async function ticketReport(state, cfg, a, out) {
       (thread.context ||= []).push(t.id);
     }
   }
-  if (rep.state === "ready") endTicket(state, cfg, t, { by: "executor", outcome: "completed" }, out);
-  else if (rep.state === "dropped") endTicket(state, cfg, t, { by: "executor", outcome: "dropped" }, out);
   const human = t.undelivered.some((id) => {
     const i = t.inputs.find((x) => x.id === id);
     return i && i.kind === "trigger" && i.human && !i.context;
   });
+  // the person wrote while this turn ran and the worker could not read it: it reads it before the ticket ends
+  const recheck = human && (rep.state === "ready" || rep.state === "dropped");
+  if (recheck) wake(state, t, { kind: "recheck", priority: true });
+  else if (rep.state === "ready") endTicket(state, cfg, t, { by: "executor", outcome: "completed" }, out);
+  else if (rep.state === "dropped") endTicket(state, cfg, t, { by: "executor", outcome: "dropped" }, out);
   if (liveTicket(t) && rep.state === "progress" && turn.kind !== "status") {
     let goOn = 0;
     for (const x of [...asg.turns].reverse()) {
@@ -1676,7 +1682,9 @@ async function ticketReport(state, cfg, a, out) {
   }
   if (liveTicket(t) && t.undelivered.length) wake(state, t, { priority: human });
   const answer = triggerOk(rep.reply_to_trigger_id) ? { trigger_id: rep.reply_to_trigger_id, summary: rep.summary } : undefined;
-  return { ticket: t.id, stage: stageLabel(t), handoff: handoffFor(t, rep), ...(answer ? { answer } : {}), ...(handbacks.length ? { handbacks } : {}) };
+  const handoff = recheck ? { kind: "none" } : handoffFor(t, rep);
+  const held = recheck ? { note: `held: the person wrote while turn ${n} ran; the worker reads it before reporting ${rep.state} again` } : {};
+  return { ticket: t.id, stage: stageLabel(t), handoff, ...held, ...(answer ? { answer } : {}), ...(handbacks.length ? { handbacks } : {}) };
 }
 
 async function superTicket(args) {
