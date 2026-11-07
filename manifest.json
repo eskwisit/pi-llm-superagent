@@ -129,6 +129,22 @@
 							},
 							"description": "set: exclusion globs to remove"
 						},
+						"excludeThinking": {
+							"type": "array",
+							"items": {
+								"type": "string",
+								"enum": [
+									"off",
+									"minimal",
+									"low",
+									"medium",
+									"high",
+									"xhigh",
+									"max"
+								]
+							},
+							"description": "set: the full list of thinking levels workers never get; a higher wanted level goes down to the next allowed one (default [\"high\", \"xhigh\", \"max\"]; [] allows all)"
+						},
 						"notes": {
 							"type": "array",
 							"items": {
@@ -637,6 +653,17 @@
 				"description": "Glob patterns of model ids never used, e.g. [\"*preview*\"].",
 				"type": "json",
 				"default": []
+			},
+			{
+				"key": "excludeThinking",
+				"title": "Excluded thinking levels",
+				"description": "Thinking levels workers never get, e.g. [\"high\", \"xhigh\", \"max\"]. A higher wanted level goes down to the next allowed one. [] allows all.",
+				"type": "json",
+				"default": [
+					"high",
+					"xhigh",
+					"max"
+				]
 			},
 			{
 				"key": "modelNotes",

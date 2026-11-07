@@ -41,6 +41,8 @@ const crypto = require("node:crypto");
 // ---------- task types: one worker persona each, with the traits its model needs ----------
 const TRAITS = ["reasoning", "coding", "writing", "context", "speed", "cost"];
 const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+/** Thinking levels workers never get unless the person allows them (setting excludeThinking). */
+const DEFAULT_EXCLUDE_THINKING = ["high", "xhigh", "max"];
 
 const TASK_TYPES = {
   code: { agent: "superagent-worker-code", weights: { coding: 5, reasoning: 3, context: 2 }, thinking: "medium", about: "implement a change: feature, fix, refactor", writes: true },
@@ -323,18 +325,28 @@ function scoreProfile(p, w, req, id, avoidFamilies) {
   return { score: round(s), notes };
 }
 
-/** Pick the suggested thinking level the model supports, closest to the wanted one. */
-function thinkingFor(type, req, p) {
+/**
+ * Pick the suggested thinking level the model supports, closest to the wanted one.
+ * `exclude` lists levels never to use (setting excludeThinking); they are skipped, the level goes down first.
+ */
+function thinkingFor(type, req, p, exclude = []) {
   let want = req.thinking;
   if (!want) {
     const i = THINKING.indexOf(TASK_TYPES[type].thinking);
     const bump = { low: -1, normal: 0, high: 1, max: 9 }[req.quality || "normal"];
     want = THINKING[Math.max(0, Math.min(THINKING.length - 1, i + bump))];
   }
+  const ok = (l) => !exclude.includes(l);
+  const allowed = THINKING.filter(ok);
+  if (allowed.length && !ok(want)) {
+    const down = allowed.filter((l) => THINKING.indexOf(l) < THINKING.indexOf(want));
+    want = down.length ? down[down.length - 1] : allowed[0];
+  }
   if (!p || !p.thinking.length) return p && p.reasoningModel ? want : null;
+  const levels = p.thinking.filter(ok).length ? p.thinking.filter(ok) : p.thinking.slice(0, 1);
   const wi = THINKING.indexOf(want);
-  const below = p.thinking.filter((l) => THINKING.indexOf(l) <= wi);
-  return below.length ? below[below.length - 1] : p.thinking[0];
+  const below = levels.filter((l) => THINKING.indexOf(l) <= wi);
+  return below.length ? below[below.length - 1] : levels[0];
 }
 
 /**
@@ -347,7 +359,7 @@ function routeTask(task, ctx) {
   const warnings = [];
   if (!ctx.entries.length) {
     if (strList(ctx.pins[type]).length) warnings.push(`${task.id}: no delegation catalog, so the ${type} role model is ignored and the session model is used`);
-    return { model: "inherit", fallbacks: [], thinking: thinkingFor(type, req, null), score: null, why: "no delegation catalog: run on the session model", candidates: [], warnings };
+    return { model: "inherit", fallbacks: [], thinking: thinkingFor(type, req, null, ctx.excludeThinking), score: null, why: "no delegation catalog: run on the session model", candidates: [], warnings };
   }
   let pool = ctx.entries.filter((e) => !matchesAny(e.id, ctx.exclude) && !matchesAny(e.id, req.avoid));
   if (!pool.length) {
@@ -414,7 +426,7 @@ function routeTask(task, ctx) {
   return {
     model: primary,
     fallbacks: chain.slice(1),
-    thinking: thinkingFor(type, req, p),
+    thinking: thinkingFor(type, req, p, ctx.excludeThinking),
     score: top ? top.score : null,
     why,
     candidates: ranked.slice(0, 5).map((r) => `${r.id} ${r.score}`),
@@ -477,6 +489,7 @@ async function settings() {
     profiles: isObj(s.modelProfiles) ? s.modelProfiles : {},
     pins: isObj(s.roleModels) ? s.roleModels : {},
     exclude: strList(s.excludeModels),
+    excludeThinking: Array.isArray(s.excludeThinking) ? THINKING.filter((l) => s.excludeThinking.includes(l)) : DEFAULT_EXCLUDE_THINKING,
     notes: strList(s.modelNotes),
     team: Object.fromEntries(Object.entries(TEAM_KEYS).map(([name, key]) => [name, str(s[key]).trim()])),
     promptRevision: Number.isInteger(s.promptRevision) ? s.promptRevision : 0,
@@ -515,7 +528,7 @@ async function loadCatalog() {
 
 function routingContext(entries, cfg) {
   const profiles = new Map(entries.map((e) => [e.id, profileOf(e, cfg.profiles)]));
-  return { entries, profiles, exclude: cfg.exclude, pins: cfg.pins, chosen: new Map() };
+  return { entries, profiles, exclude: cfg.exclude, excludeThinking: cfg.excludeThinking || DEFAULT_EXCLUDE_THINKING, pins: cfg.pins, chosen: new Map() };
 }
 
 // ---------- state (workspace, through pi.fs) ----------
@@ -911,7 +924,7 @@ async function scheduleMerges(state, cfg, out) {
     channels: [key], attention: undefined, assignments: [], inputs: [], undelivered: [], answers: [], createdAt: now(), updatedAt: now(),
     origin: { triggerId: first.origin.triggerId, triggerIds: [] }, note: "", req, merges: ids,
     model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
-    thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor("merge", req, ctx.profiles.get(m)) : route.thinking])),
+    thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor("merge", req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
   };
   state.tickets[id] = t;
   for (const s of ready) s.merge = { state: "merging", by: id, at: now() };
@@ -975,15 +988,23 @@ async function promote(state, cfg, out) {
     Object.assign(turn, { state: "running", startedAt: now(), extra });
     if (a.state === "pending") Object.assign(a, { state: "running", startedAt: now() });
     await pi.fs.writeText(turn.brief, t.type === "merge" ? buildMergeBrief(state, cfg, t, a, turn) : buildBrief(state, cfg, t, a, turn));
-    out.launch.push(launchItem(t, a, turn));
+    out.launch.push(launchItem(t, a, turn, cfg));
   }
   out.queued = pending.filter(([, , turn]) => turn.state === "pending").map(([t, , turn]) => `${t.id}#${turn.n}`);
 }
 
-function launchItem(t, a, turn) {
+/** A stored thinking level, stepped down when the person excluded it after the ticket was routed. */
+function allowedThinking(level, exclude) {
+  if (!level || !exclude.includes(level)) return level;
+  const down = THINKING.filter((l) => !exclude.includes(l) && THINKING.indexOf(l) < THINKING.indexOf(level));
+  return down.length ? down[down.length - 1] : level;
+}
+
+function launchItem(t, a, turn, cfg) {
+  const stored = t.thinkingByModel && a.model in t.thinkingByModel ? t.thinkingByModel[a.model] : t.thinking;
   return {
     ticket: t.id, turn: turn.n, attempt: (turn.attempts || 0) + 1, agent: TASK_TYPES[t.type].agent, model: a.model,
-    thinking: t.thinkingByModel && a.model in t.thinkingByModel ? t.thinkingByModel[a.model] : t.thinking,
+    thinking: allowedThinking(stored, (cfg && cfg.excludeThinking) || DEFAULT_EXCLUDE_THINKING),
     task: `Read your brief at ${turn.brief} in full and follow it.`, report: turn.report,
     ...(t.isolation && t.isolation.mode === "worktree" ? { worktree: t.isolation.path } : {}),
   };
@@ -1494,7 +1515,7 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
       undelivered: [], answers: [], createdAt: now(), updatedAt: now(), origin: { triggerId: ev.primary, triggerIds: ev.triggerIds },
       note, req, model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
       // the suggested thinking level of every model the ticket may run on, so a failover keeps a valid one
-      thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, req, ctx.profiles.get(m)) : route.thinking])),
+      thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
       ...(split ? { siblings: ids.filter((x) => x !== id) } : {}),
       ...(d.after.length ? { after: d.after } : {}),
     };
@@ -1609,6 +1630,13 @@ async function superConfig(args) {
       for (const p of strList(a.exclude)) if (!ex.includes(p)) ex.push(p);
       patch.excludeModels = ex.filter((p) => !strList(a.include).includes(p));
     }
+    if (a.excludeThinking !== undefined) {
+      const list = strList(a.excludeThinking);
+      const bad = list.filter((l) => !THINKING.includes(l));
+      if (!Array.isArray(a.excludeThinking) || bad.length) fail(`excludeThinking must be an array of ${THINKING.join(", ")}`);
+      if (THINKING.every((l) => list.includes(l))) fail("excludeThinking must leave at least one thinking level");
+      patch.excludeThinking = THINKING.filter((l) => list.includes(l));
+    }
     if (a.notes !== undefined) patch.modelNotes = [...new Set([...(patch.modelNotes || before.notes), ...strList(a.notes)])];
     if (isObj(a.team)) {
       for (const [name, text] of Object.entries(a.team)) {
@@ -1660,7 +1688,7 @@ async function superConfig(args) {
       writers: parallelWriters(cfg, state) ? "in parallel, each in its own git worktree; a merge worker lands their branches"
         : cfg.isolation === "serial" || state.vcs === "none" ? "one at a time in the shared checkout"
           : "one at a time until a worker confirms that the workspace is a git repository, then in parallel worktrees",
-      roleModels: cfg.pins, overrides: cfg.profiles, exclude: cfg.exclude, notes: cfg.notes,
+      roleModels: cfg.pins, overrides: cfg.profiles, exclude: cfg.exclude, excludeThinking: cfg.excludeThinking, notes: cfg.notes,
       team: Object.fromEntries(Object.keys(TEAM_KEYS).map((n) => [n, cfg.team[n] ? `custom (${cfg.team[n].length} chars)` : "default"])),
       promptRevision: cfg.promptRevision,
       taskTypes: Object.fromEntries(Object.entries(TASK_TYPES).map(([k, v]) => [k, `${v.agent}: ${v.about}`])),
@@ -1955,7 +1983,7 @@ async function ticketReport(state, cfg, a, out) {
     if ((transient || limit) && turn.attempts + 1 < TURN_RETRIES) {
       turn.attempts++;
       turn.startedAt = now();
-      out.launch.push(launchItem(t, asg, turn));
+      out.launch.push(launchItem(t, asg, turn, cfg));
       return { ticket: t.id, stage: stageLabel(t), note: `passing failure (${reason}): relaunch turn ${n} (attempt ${turn.attempts + 1} of ${TURN_RETRIES})`, handoff: { kind: "none" } };
     }
     for (const id of turn.inputs) if (!t.undelivered.includes(id)) t.undelivered.push(id);
@@ -2060,7 +2088,7 @@ async function superTicket(args) {
         if (!t.chain.includes(model) && !catalog.entries.some((e) => e.id === model)) fail(`${model} is not among your sub-agent models`);
         if (!t.chain.includes(model)) t.chain.splice(t.chain.indexOf(t.model) + 1, 0, model);
         const entry = catalog.entries.find((e) => e.id === model);
-        if (entry) (t.thinkingByModel ||= {})[model] = thinkingFor(t.type, t.req, profileOf(entry, cfg.profiles));
+        if (entry) (t.thinkingByModel ||= {})[model] = thinkingFor(t.type, t.req, profileOf(entry, cfg.profiles), cfg.excludeThinking);
         t.model = model;
       }
       restartAssignment(state, t, null, "retry");
@@ -2194,6 +2222,7 @@ const TOOLS = [
         profiles: { type: "object", description: "set: { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision|reasoningModel|unstable: bool, thinking: [levels] } }; null removes" },
         exclude: { type: "array", items: { type: "string" }, description: "set: model id globs never to use" },
         include: { type: "array", items: { type: "string" }, description: "set: exclusion globs to remove" },
+        excludeThinking: { type: "array", items: { type: "string", enum: THINKING }, description: "set: the full list of thinking levels workers never get; a higher wanted level goes down to the next allowed one (default [\"high\", \"xhigh\", \"max\"]; [] allows all)" },
         notes: { type: "array", items: { type: "string" } },
         team: { type: "object", description: "set: { communication|scope|delivery: text }; \"\" restores the default" },
         show: { type: "array", items: { type: "string" }, description: "get: team sections to return in full" },
