@@ -182,7 +182,7 @@ For every `launch` item, call `Task`. Put **all** items in one message, so they 
 - `task`: the item's `task`, verbatim;
 - `description`: `<ticket> #<turn>`.
 
-`thinking` is the suggested reasoning level. Pass it only if your `Task` tool takes one.
+`thinking` is the suggested reasoning level. Pass it only if your `Task` tool takes one. It never is a level in the `excludeThinking` setting (default `high`, `xhigh`, `max`). Do not raise it above the suggested level.
 
 Keep a map from `<ticket>#<turn>` to its `delegationId` and `attempt`, because you need them
 for `stopAgents` and for reporting.
