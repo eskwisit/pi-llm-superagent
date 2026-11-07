@@ -119,9 +119,27 @@ describe("routing by type and requirements", () => {
   });
 
   it("suggests a thinking level the chosen model supports", async () => {
-    const { preview } = await setup({ roleModels: { analysis: ["google/gemini-3.8-flash"] } });
+    const { preview } = await setup({ excludeThinking: [], roleModels: { analysis: ["google/gemini-3.8-flash"] } });
     const [r] = await preview([{ type: "analysis", requirements: { quality: "max" } }]);
     assert.equal(r.thinking, "high");
+  });
+
+  it("by default caps the thinking level at medium, even when a task asks for more", async () => {
+    const { preview } = await setup({ roleModels: { analysis: ["google/gemini-3.8-flash"] } });
+    const [r, s] = await preview([{ type: "analysis", requirements: { quality: "max" } }, { type: "analysis", requirements: { thinking: "xhigh" } }]);
+    assert.equal(r.thinking, "medium");
+    assert.equal(s.thinking, "medium");
+  });
+
+  it("excludeThinking skips the listed levels and steps down to the next allowed one", async () => {
+    const { preview, pi } = await setup({ roleModels: { analysis: ["google/gemini-3.8-flash"] } });
+    await pi.call("superagent_config", { action: "set", excludeThinking: ["medium", "high"] });
+    const [r] = await preview([{ type: "analysis" }]);
+    assert.equal(r.thinking, "low");
+    const got = await pi.call("superagent_config", { action: "get" });
+    assert.deepEqual(got.excludeThinking, ["medium", "high"]);
+    await assert.rejects(pi.call("superagent_config", { action: "set", excludeThinking: ["huge"] }), /excludeThinking must be/);
+    await assert.rejects(pi.call("superagent_config", { action: "set", excludeThinking: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] }), /at least one/);
   });
 
   it("rejects invalid requirements", async () => {

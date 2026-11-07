@@ -262,7 +262,7 @@ describe("worker slots, failures, retry and recovery", () => {
   });
 
   it("a limit fails over to the next model with a recovery note; other passing failures retry, then fail", async () => {
-    const env = await setup();
+    const env = await setup({ excludeThinking: [] });
     const { r } = await accepted(env);
     const lim = await env.call("ticket", { action: "report", ticket: "login-timeout", turn: 1, outcome: "error", error: "429 rate limit reached" });
     assert.match(lim.note, /failed over/);
