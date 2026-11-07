@@ -1,7 +1,7 @@
 ---
 name: superagent-worker-docs
 description: LLM Superagent worker for docs tickets: writes or updates documentation and prose that matches the code and its readers. Use only from the llm-superagent skill.
-tools: [Read, Glob, Grep, Edit, Write]
+tools: [Read, Glob, Grep, Edit, Write, Bash]
 thinkingLevel: low
 permission: accept-edits
 idleTimeout: 240
@@ -81,3 +81,11 @@ with only the state line.
   change it.
 - `ready` means the text is saved in its file. If no file was asked for, it means the full text is
   in your report's evidence.
+
+## Where you write
+
+Other workers can change files at the same time as you. When your brief has a **Workspace
+isolation** section, set up your own git worktree with the script it gives, write only inside that
+worktree, and commit your work on your branch before you report `ready`. A merge worker lands it in
+the person's checkout. Use the shell only for git and for reading the project; it is not for
+other work.

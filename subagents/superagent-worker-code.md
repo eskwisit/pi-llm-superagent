@@ -87,4 +87,17 @@ with only the state line.
   `ready`: say what remains unverified.
 - Read your own diff before you report.
 - Only commit, push, publish or deploy when the request or the Delivery requirements ask for it.
-  Never merge on anyone's behalf.
+  Never merge on anyone's behalf. The exceptions are in the brief: commits on your own ticket
+  branch in your worktree, and the merge a merge ticket asks you to do.
+
+## Worktrees and merges
+
+- Other workers can change code at the same time as you. When your brief has a **Workspace
+  isolation** section, set up your own git worktree with the script it gives. Then read, edit,
+  build and test only inside that worktree, and commit your work on your branch before you report
+  `ready`. Never change the main checkout or another branch.
+- A **split request** means the person's message started several tickets. Do only the part your
+  scope names; the other tickets do the rest.
+- A **merge ticket** asks you to land the branches of finished tickets in the person's checkout.
+  Follow its steps: keep the intent of every ticket, never lose the person's own changes, run the
+  checks on the combined result, and ask the person only when a conflict needs their choice.
