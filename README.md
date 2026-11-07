@@ -32,7 +32,7 @@ ticket + mandate ─► assignment ─► turns ─► report ─► handoff (re
 | **Subscriptions** | Your replies on a ticket's thread reach its worker without a new Eval. A message you send while a worker runs is read in a recheck turn before the ticket can end. Workers hand back what is not theirs, and unread messages are released when a person stops a ticket. |
 | **Report, attention** | `progress`, `waiting`, `ready`, `blocked`, `failed` or `dropped`, plus at most one question for you. |
 | **Replies** | Checked by purpose (result, attention or answer), at most 100 words, never sent twice. |
-| **Parallel work** | One message can start several tickets, one per separate request. Workers that change files each work in their own git worktree; a merge worker lands their branches in your checkout. |
+| **Parallel work** | One message can start several tickets, one per separate request. A ticket that needs the results of others starts after they end. Workers that change files each work in their own git worktree; a merge worker lands their branches in your checkout. |
 | **Slots, recovery** | 3 concurrent workers plus one slot kept for your messages. Retries, status requests, notes, and recovery of turns cut off by a restart. |
 
 ## Workers and models
@@ -67,6 +67,12 @@ no model is enabled for sub-agents, workers run on the session model.
 
 A message with several separate requests ("rename the Save button, and add a dark-mode toggle")
 starts one ticket per request. They run in parallel, and each worker knows which part is its own.
+
+A message can also ask for parallel parts and then a step that needs their results ("run the
+benchmark with tool A and with tool B, then compare the output and the token use"). That starts
+one ticket per part and one ticket for the step. The step waits (`after`) until the parts end,
+with their branches merged first if they change files. Its brief then points to their reports. A
+chain where each step needs the one before it stays one ticket.
 
 Workers that change files (`code`, `debug`, `test`, `docs`) never share a checkout:
 
