@@ -23,6 +23,7 @@ message ─► superagent_intake ─┬─► follow-up: it replies on a ticket'
 explicit  ─► superagent_route        accept | attach | stop | ignore
 inferred  ─► superagent_eval_decide  judge every enabled rule; accepted only in auto mode
 accepted  ─► Task(worker, model) per `launch` item ─► superagent_ticket report ─► handoff
+writers   ─► own git worktree each ─► ready branch ─► merge ticket lands it ─► handoff
 ```
 
 ## Tools
@@ -86,7 +87,7 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
 
 | kind | When |
 |---|---|
-| `accept` | New work. Required: `title`, `name`, `type`, `acknowledgement`. Optional: `note`, `scope`, `requirements`. |
+| `accept` | New work. Required: `title`, `name`, `type`, `acknowledgement`. Optional: `note`, `scope`, `requirements`. For several separate requests in one message: `tickets` (see below) and one `acknowledgement`. |
 | `attach` | The message points explicitly at one ticket: it names it, quotes its result or question, or plainly continues the change just made, and exactly one ticket fits. |
 | `stop` | The person asks to stop a ticket. Afterwards, the rest of the message may still be accepted as new work. |
 | `ignore` | Ordinary discussion, thanks, a quick question you answered. Give a reason. |
@@ -106,9 +107,13 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
   thing and the intended result, e.g. "On it: renaming the settings button from 'Save changes'
   to 'Save'." Never write a generic "I'll handle it". Post the returned `post` text **once**, as
   your reply to the message.
-- **One request, one ticket.** Never split a request into steps; the worker does that. Several
-  unrelated requests in one message are several candidates' worth of work. Accept the main one,
-  and tell the person in one line what else you saw, so they can ask for it separately.
+- **One request, one ticket.** Never split a request into steps; the worker does that.
+- **Several separate requests in one message: one ticket each, in one accept.** Put them in
+  `tickets`, one entry per request, each with `title`, `name`, `type`, `scope` and, if needed,
+  `note` and `requirements`. `scope` is one sentence that names the part of the message the
+  ticket owns. The tickets run in parallel, and each worker knows its siblings. Write one
+  `acknowledgement` that names all of them. Split only requests that stand on their own: when one
+  needs the result of another, it is one ticket.
 - **A request that needs a decision first:** if the request leaves open a choice only the person
   can make (an unsettled design, a choice between products), ask that single question instead of
   accepting a guess.
@@ -175,9 +180,18 @@ For every `launch` item, call `Task`. Put **all** items in one message, so they 
 
 Keep a map from `<ticket>#<turn>` to its `delegationId` and `attempt`, because you need them
 for `stopAgents` and for reporting.
+
 Turns in `queued` wait for a free slot; the tools hand them to you as `launch` when one opens.
 One slot beyond `maxWorkers` is kept for turns that carry a person's message.
 Then call `TaskWait` with `mode: "any"`.
+
+**Parallel writers.** Workers that change files (`code`, `debug`, `test`, `docs`) never share a
+checkout. Each one works in its own git worktree on branch `superagent/<ticket>`; the `worktree`
+field of a launch item shows where. A ready branch waits for a **merge ticket** (`merge`, `merge-2`,
+…; type `merge`), which the tools start on their own. It lands the branches in the person's checkout, one
+merge at a time, and waits for the other tickets of the same message. Launch it like any other
+item. Until a worker confirms that the workspace is a git repository, and in a workspace without
+git, writers run one at a time; their turns wait in `queued`.
 
 ## 5. When a worker returns: `superagent_ticket report`
 
@@ -191,10 +205,10 @@ hit**. Launch whatever comes back in `launch`. Then act on `handoff`:
 
 | handoff.kind | Do |
 |---|---|
-| `result` | Write one or two sentences: the outcome the person can use now, and where it is. Clear it with `superagent_reply` `purpose: "result"` and post the returned text. Never forward the report, or shrink it point by point. |
+| `result` | Write one or two sentences: the outcome the person can use now, and where it is. Clear it with `superagent_reply` `purpose: "result"` and post the returned text. Never forward the report, or shrink it point by point. A merge result carries `merged`: the tickets it landed. Write one message that covers all of them, on the merge ticket. |
 | `question` | `superagent_reply` `purpose: "attention"` with `question` copied **exactly**. Ask the person that one question; use `asktool` when it has clear options. |
 | `blocker` / `failure` | No structured question, so the ticket shows under `needsPerson`. At the end of your turn, tell the person in one sentence: the concrete obstacle and the smallest action that would remove it, or plainly that it cannot be done. Offer `retry`, on another model if useful. |
-| `none` | Say nothing. Progress stays internal. |
+| `none` | Say nothing. Progress stays internal. A writer's ready branch that waits for its merge also returns `none`: the person hears the result after the merge. |
 
 `handbacks` and new `candidates` are new triggers to decide. When the response carries
 `answer`, the worker answered a question the person asked. Send that answer with
@@ -218,8 +232,11 @@ its `summary`.
 - **Unsubscribe:** `unsubscribe { thread }` drops every ticket's subscription to a thread.
 - **Requeue:** `requeue { trigger_id }` evaluates a message again.
 - **Dismiss:** `dismiss { decision }` hides an unavailable decision.
+- **Merge again:** when a person stopped a merge, its branches show as not merged. `merge { ticket? }`
+  queues them again, when the person asks.
 - **Policy:** use `superagent_config set` for the mode (`off` / `observe` / `auto`), rules,
-  allowed senders, admission, `maxWorkers`, pause, team sections, role models and exclusions.
+  allowed senders, admission, `maxWorkers`, pause, `isolation` (`auto` / `worktree` / `serial`),
+  team sections, role models and exclusions.
   Change these only when the person asks. A policy change re-queues running evals and notifies
   the affected tickets by itself.
 
