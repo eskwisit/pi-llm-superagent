@@ -32,6 +32,7 @@ ticket + mandate ─► assignment ─► turns ─► report ─► handoff (re
 | **Subscriptions** | Your replies on a ticket's thread reach its worker without a new Eval. A message you send while a worker runs is read in a recheck turn before the ticket can end. Workers hand back what is not theirs, and unread messages are released when a person stops a ticket. |
 | **Report, attention** | `progress`, `waiting`, `ready`, `blocked`, `failed` or `dropped`, plus at most one question for you. |
 | **Replies** | Checked by purpose (result, attention or answer), at most 100 words, never sent twice. |
+| **Parallel work** | One message can start several tickets, one per separate request. Workers that change files each work in their own git worktree; a merge worker lands their branches in your checkout. |
 | **Slots, recovery** | 3 concurrent workers plus one slot kept for your messages. Retries, status requests, notes, and recovery of turns cut off by a restart. |
 
 ## Workers and models
@@ -62,6 +63,29 @@ quota, context window, overload), the ticket fails over to its next model, on an
 first since limits are per account, with that model's own thinking level. If
 no model is enabled for sub-agents, workers run on the session model.
 
+## Parallel tickets without collisions
+
+A message with several separate requests ("rename the Save button, and add a dark-mode toggle")
+starts one ticket per request. They run in parallel, and each worker knows which part is its own.
+
+Workers that change files (`code`, `debug`, `test`, `docs`) never share a checkout:
+
+1. Each worker makes its own git worktree, `.superagent/worktrees/<ticket>`, on a local branch
+   `superagent/<ticket>`. The branch starts from your current state, including your uncommitted
+   changes. The worker builds, tests and commits only there.
+2. When a worker reports `ready`, its branch waits for a **merge ticket**. The merge worker lands
+   the branches in your checkout, one merge at a time, resolves conflicts so that every ticket's
+   intent stays, runs the checks on the combined result, and removes the worktrees. Tickets from
+   the same message are merged together.
+3. You get one result message for the merge. The changes stay uncommitted in your working tree
+   unless your request or the Delivery requirements ask for a commit. Nothing is pushed.
+
+Until a worker confirms that the workspace is a git repository, and always in a workspace without
+git, workers that change files run one at a time in your checkout. Read-only workers (`research`,
+`analysis`, `review`) always run in parallel; a review can read a ticket's branch before it is
+merged. Set `isolation` to `worktree` to use worktrees from the first ticket, or to `serial` to
+never use them.
+
 ## Usage
 
 In a workspace, say for example:
@@ -85,6 +109,7 @@ sentence, and launches the code worker on your strongest coding model. Then:
 | `maxWorkers` | `3` | worker turns at once, plus one slot for you |
 | `evalTimeoutSeconds` | `120` | how long a candidate waits for a decision |
 | `paused` | `false` | record messages but evaluate, launch and send nothing |
+| `isolation` | `auto` | `auto`, `worktree` or `serial`: how workers that change files avoid collisions |
 | `roleModels` | `{}` | pinned models per task type |
 | `modelProfiles` | `{}` | corrections to inferred traits |
 | `excludeModels`, `modelNotes` | `[]` | models never used; notes for the orchestrator |
@@ -99,10 +124,13 @@ sentence, and launches the code worker on your strongest coding model. Then:
 - The plugin has no network access and runs no processes. Workers are ordinary PI-Desktop
   sub-agents:
   - the code and docs workers can edit workspace files;
-  - the code, research, analysis and review workers can run shell commands.
+  - every worker can run shell commands (the docs worker uses them only for git);
+  - workers that change files create git worktrees under `.superagent/worktrees` and local
+    `superagent/<ticket>` branches, and the merge worker removes them after it lands them.
 
-  They do so with the permissions PI-Desktop grants sub-agents. They never commit, push,
-  publish or merge unless your request or the Delivery requirements say so.
+  They do so with the permissions PI-Desktop grants sub-agents. Apart from commits on their own
+  ticket branches and the merge into your working tree, they never commit, push, publish or
+  merge unless your request or the Delivery requirements say so.
 
 ## Development
 
