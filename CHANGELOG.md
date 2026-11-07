@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+
+### Features
+
+- **main:** start a split ticket after the tickets whose results it needs (`15dcb0e`)
+- **skills:** split parallel parts and a step that needs their results (`be9509a`)
+
+### Documentation
+
+- **readme:** explain tickets that start after others end (`591a906`)
+
+### Tests
+
+- cover tickets that wait for the results of others (`487edd4`)
+
 ## 0.5.0
 
 ### Features
