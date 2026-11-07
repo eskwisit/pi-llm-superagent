@@ -27,7 +27,8 @@ async function setup(settings = {}, models = MODELS) {
     restore();
     fs.rmSync(dirs.base, { recursive: true, force: true });
   });
-  const pi = fakePi(dirs, { settings, models });
+  // the lifecycle tests run writers in the shared checkout; worktree isolation has its own tests
+  const pi = fakePi(dirs, { settings: { isolation: "serial", ...settings }, models });
   const main = loadMain(pi);
   await main.onLoad();
   const call = (name, args) => pi.call(`superagent_${name}`, args);
@@ -242,7 +243,7 @@ describe("follow-ups, subscriptions, handback and release", () => {
 
 describe("worker slots, failures, retry and recovery", () => {
   it("turns beyond maxWorkers queue; only a person's message may use the one extra slot", async () => {
-    const env = await setup({ maxWorkers: 1 });
+    const env = await setup({ maxWorkers: 1, isolation: "worktree" });
     const a = await accepted(env, "first");
     env.report("login-timeout", 1, "state: waiting\nsummary: idle\nhuman_action: none\n---\n");
     await env.call("ticket", { action: "report", ticket: "login-timeout", turn: 1 });
