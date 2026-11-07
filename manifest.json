@@ -2,7 +2,7 @@
 	"schemaVersion": 1,
 	"id": "eskwisit.llm-superagent",
 	"name": "LLM Superagent",
-	"version": "0.1.5",
+	"version": "0.5.0",
 	"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
 	"author": "eskwisit",
 	"license": "Apache-2.0",
@@ -25,7 +25,7 @@
 		}
 	},
 	"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and every worker can run shell commands, with the permissions PI-Desktop grants sub-agents. Workers that change files run in parallel, each in its own git worktree under .superagent/worktrees on a local superagent/<ticket> branch; a merge worker then lands the branches in your checkout as uncommitted changes. Without git they run one at a time. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings.",
-	"changelog": "The plugin now describes itself in Chinese too and is licensed under Apache-2.0, like its sibling plugins.",
+	"changelog": "One message can now start several tickets that run in parallel; workers that change files each use their own git worktree, and a merge worker lands their branches in your checkout.",
 	"contributes": {
 		"skills": [
 			"skills/llm-superagent.md"
