@@ -297,7 +297,7 @@
 									},
 									"tickets": {
 										"type": "array",
-										"description": "accept: when the message holds several separate requests, one entry per request (2–8); they run in parallel. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them",
+										"description": "accept: when the message holds several separate requests, one entry per request (2–8); they run in parallel, except an entry with after, which starts once those tickets ended. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them",
 										"items": {
 											"type": "object",
 											"properties": {
@@ -333,6 +333,13 @@
 												"scope": {
 													"type": "string",
 													"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
+												},
+												"after": {
+													"type": "array",
+													"items": {
+														"type": "string"
+													},
+													"description": "optional: the names of other entries of this tickets list whose results this ticket needs (for example a comparison of their outputs). It starts once they ended (a writer's branch merged), and its brief lists their reports. Leave it out for parts that can run in parallel"
 												}
 											},
 											"required": [

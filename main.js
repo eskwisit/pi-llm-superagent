@@ -574,6 +574,8 @@ const latestReport = (t) => {
 };
 const activeTurn = (a) => a && a.turns.find((x) => x.state !== "ended");
 const ticketTurns = (t) => t.assignments.flatMap((a) => a.turns);
+/** The tickets of `after` that have not ended yet: until they end, this ticket does not start. */
+const afterOpen = (state, t) => (t.after || []).filter((id) => state.tickets[id] && liveTicket(state.tickets[id]));
 
 /** The latest assignment reported blocked or failed and no person's message reached the ticket since. */
 function waitsForPerson(t) {
@@ -888,7 +890,8 @@ async function scheduleMerges(state, cfg, out) {
   const queued = tickets.filter((t) => liveTicket(t) && t.merge && t.merge.state === "queued");
   const ready = queued.filter((t) => !(t.siblings || []).some((id) => {
     const s = state.tickets[id];
-    return s && liveTicket(s) && writes(s) && !s.merge && ticketStage(s).stage === "working";
+    // a sibling that waits for `after` tickets cannot get ready before they end: waiting for it would never end
+    return s && liveTicket(s) && writes(s) && !s.merge && !afterOpen(state, s).length && ticketStage(s).stage === "working";
   }));
   if (!ready.length) return;
   const catalog = await loadCatalog();
@@ -955,6 +958,7 @@ async function promote(state, cfg, out) {
   pending.sort((x, y) => Number(y[2].priority) - Number(x[2].priority) || x[2].seq - y[2].seq);
   for (const [t, a, turn] of pending) {
     if (t.merge && t.merge.state === "merging") continue; // its branch is being merged: the turn waits
+    if (afterOpen(state, t).length) continue; // it needs the results of tickets that have not ended yet
     ensureIsolation(state, cfg, t);
     const excl = exclusive(cfg, state, t);
     if (excl && exclusiveRunning) continue;
@@ -1052,7 +1056,21 @@ ${reportSection(turn, t.isolation && t.isolation.mode === "worktree" ? ["isolati
 function siblingSection(state, t) {
   const sibs = (t.siblings || []).map((id) => state.tickets[id]).filter(Boolean);
   if (!sibs.length) return "";
-  return `\n## Split request\n\nThe original request asks for several separate things, so it started several tickets that run in parallel. Your part is the scope of your Mandate. These tickets own the other parts: leave them alone, and do not report their work as missing.\n\n${sibs.map((s) => `- ${s.id} (${s.type}): ${s.mandate.scope}`).join("\n")}\n\n`;
+  const after = (s) => (s.after && s.after.length ? ` (starts after ${s.after.join(", ")})` : "");
+  return `\n## Split request\n\nThe original request asks for several separate things, so it started several tickets that run in parallel; a ticket that needs the results of others starts after they end. Your part is the scope of your Mandate. These tickets own the other parts: leave them alone, and do not report their work as missing.\n\n${sibs.map((s) => `- ${s.id} (${s.type}): ${s.mandate.scope}${after(s)}`).join("\n")}\n\n${afterSection(state, t)}`;
+}
+
+/** The tickets whose results this ticket needs (`after`): they ended before it started, so their reports are final. */
+function afterSection(state, t) {
+  const pre = (t.after || []).map((id) => state.tickets[id]).filter(Boolean);
+  if (!pre.length) return "";
+  const line = (s) => {
+    const last = [...ticketTurns(s)].reverse().find((x) => x.reportState);
+    const outcome = s.ended ? s.ended.outcome : stageLabel(s);
+    const where = s.merged ? " Its changes are merged into the main checkout." : "";
+    return `- ${s.id} (${s.type}, ${outcome}): ${s.mandate.scope}\n  report: \`${last ? last.report : "(none)"}\`${last && last.summary ? `: ${last.summary}` : ""}${where}`;
+  };
+  return `## Results you build on\n\nThis ticket needs the results of these tickets of the same message, so it started after they ended. Read their reports before you start. Use their results and do not redo their work. If one did not complete and your part cannot be done without it, report blocked and name that ticket.\n\n${pre.map(line).join("\n")}\n\n`;
 }
 
 /** Where a writer works: its own git worktree and branch, or the shared checkout while no other writer runs. */
@@ -1392,11 +1410,45 @@ function evalOf(state, cfg, triggerId, out) {
 }
 
 /**
+ * `after` of each split ticket: names (or 0-based indexes) of other tickets of the same message whose results it
+ * needs. Resolved to ticket ids on the drafts; an unknown name, a ticket that waits for itself, or a loop fails.
+ */
+function resolveAfter(specs, drafts, split) {
+  const byName = new Map();
+  drafts.forEach((d, k) => {
+    for (const n of [d.id, str(specs[k].name).trim(), slug(specs[k].name || specs[k].title)]) if (n && !byName.has(n)) byName.set(n, k);
+  });
+  const deps = drafts.map((d, k) => {
+    const raw = specs[k].after;
+    if (raw === undefined || raw === null || (Array.isArray(raw) && !raw.length)) return [];
+    if (!split) fail("after is only for tickets[]: it names other tickets of the same message");
+    if (!Array.isArray(raw)) fail(`tickets[${k}]: after must be a list of names of other tickets of this message`);
+    return [...new Set(raw.map((x) => {
+      const j = Number.isInteger(x) ? x : byName.has(str(x).trim()) ? byName.get(str(x).trim()) : -1;
+      if (j < 0 || j >= drafts.length) fail(`tickets[${k}]: after names ${JSON.stringify(x)}, which is not a ticket of this message`);
+      if (j === k) fail(`tickets[${k}]: a ticket cannot wait for itself`);
+      return j;
+    }))];
+  });
+  const mark = drafts.map(() => 0);
+  const visit = (k) => {
+    if (mark[k] === 2) return;
+    if (mark[k] === 1) fail(`after makes a loop through tickets[${k}]: the tickets of a loop would wait for each other forever`);
+    mark[k] = 1;
+    for (const j of deps[k]) visit(j);
+    mark[k] = 2;
+  };
+  drafts.forEach((_, k) => visit(k));
+  drafts.forEach((d, k) => { d.after = deps[k].map((j) => drafts[j].id); });
+}
+
+/**
  * Accept: one ticket per separate request of the message (`fields.tickets`), or one ticket for the whole message.
  * Each ticket gets its own Mandate scope and model, and is subscribed to the batch's threads. Everything is
  * checked before anything is written, so a bad item leaves no half-made tickets.
  */
 function createTicket(state, cfg, catalog, thread, ev, fields, out) {
+  if (!Array.isArray(fields.tickets) && fields.after !== undefined) fail("after is only for tickets[]: it names other tickets of the same message");
   const earlier = Object.values(state.tickets).find((x) => x.origin.triggerIds.includes(ev.primary));
   if (earlier) fail(`message ${ev.primary} already started ticket ${earlier.id}; attach to it or ignore`);
   const split = Array.isArray(fields.tickets) && fields.tickets.length > 0;
@@ -1426,6 +1478,7 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
     out.warnings.push(...route.warnings);
     return { id, type, title, note, req, route, scope: scope || title };
   });
+  resolveAfter(specs, drafts, split);
   if (fields.requireAck && !ack) fail("acknowledgement is required: one short sentence naming the concrete change and its intended result");
   checkWords(ack, IM_WORDS, "the acknowledgement");
   const ids = drafts.map((d) => d.id);
@@ -1443,6 +1496,7 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
       // the suggested thinking level of every model the ticket may run on, so a failover keeps a valid one
       thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, req, ctx.profiles.get(m)) : route.thinking])),
       ...(split ? { siblings: ids.filter((x) => x !== id) } : {}),
+      ...(d.after.length ? { after: d.after } : {}),
     };
     state.tickets[id] = t;
     for (const trId of [ev.primary, ...ev.triggerIds.filter((x) => x !== ev.primary)]) {
@@ -1991,6 +2045,7 @@ async function superTicket(args) {
       undelivered: t.undelivered.length, latestReport: latest,
       ...(t.isolation ? { isolation: t.isolation } : {}), ...(t.merge ? { merge: t.merge } : {}), ...(t.merges ? { merges: t.merges } : {}),
       ...(t.siblings ? { siblings: t.siblings } : {}),
+      ...(t.after ? { after: t.after, waitsFor: afterOpen(state, t) } : {}),
     };
   }
   return withState(async (state, cfg, out) => {
@@ -2078,7 +2133,8 @@ async function superTicket(args) {
 function ticketList(state, cfg) {
   const order = ["person/answer", "person/review", "person/blocked", "person/failed", "working", "working/merge", "working/queued", "idle"];
   const line = (t) => `${t.id} [${stageLabel(t)}] ${t.type} on ${t.model}: ${t.title}${t.attention ? ` · asks: ${t.attention.question}` : ""}`
-    + `${t.merge && t.merge.state === "unmerged" ? ` · branch ${t.isolation.branch} not merged (superagent_ticket merge)` : ""}`;
+    + `${t.merge && t.merge.state === "unmerged" ? ` · branch ${t.isolation.branch} not merged (superagent_ticket merge)` : ""}`
+    + `${afterOpen(state, t).length ? ` · waits for ${afterOpen(state, t).join(", ")}` : ""}`;
   const tickets = Object.values(state.tickets);
   const open = tickets.filter(liveTicket).sort((a, b) => order.indexOf(stageLabel(a)) - order.indexOf(stageLabel(b)));
   const ended = tickets.filter((t) => !liveTicket(t)).sort((a, b) => str(b.updatedAt).localeCompare(str(a.updatedAt))).slice(0, 10);
@@ -2194,8 +2250,15 @@ const TOOLS = [
               ...ACCEPT_FIELDS,
               tickets: {
                 type: "array",
-                description: `accept: when the message holds several separate requests, one entry per request (2–${MAX_SPLIT}); they run in parallel. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them`,
-                items: { type: "object", properties: { ...Object.fromEntries(Object.entries(ACCEPT_FIELDS).filter(([k]) => k !== "acknowledgement")) }, required: ["title", "name", "type", "scope"] },
+                description: `accept: when the message holds several separate requests, one entry per request (2–${MAX_SPLIT}); they run in parallel, except an entry with after, which starts once those tickets ended. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them`,
+                items: {
+                  type: "object",
+                  properties: {
+                    ...Object.fromEntries(Object.entries(ACCEPT_FIELDS).filter(([k]) => k !== "acknowledgement")),
+                    after: { type: "array", items: { type: "string" }, description: "optional: the names of other entries of this tickets list whose results this ticket needs (for example a comparison of their outputs). It starts once they ended (a writer's branch merged), and its brief lists their reports. Leave it out for parts that can run in parallel" },
+                  },
+                  required: ["title", "name", "type", "scope"],
+                },
               },
             },
             required: ["kind", "trigger_id"],
