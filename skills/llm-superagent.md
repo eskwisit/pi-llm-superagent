@@ -87,7 +87,7 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
 
 | kind | When |
 |---|---|
-| `accept` | New work. Required: `title`, `name`, `type`, `acknowledgement`. Optional: `note`, `scope`, `requirements`. For several separate requests in one message: `tickets` (see below) and one `acknowledgement`. |
+| `accept` | New work. Required: `title`, `name`, `type`, `acknowledgement`. Optional: `note`, `scope`, `requirements`. For several requests in one message, or parallel parts with a step that needs their results: `tickets` (see below), each entry with an optional `after`, and one `acknowledgement`. |
 | `attach` | The message points explicitly at one ticket: it names it, quotes its result or question, or plainly continues the change just made, and exactly one ticket fits. |
 | `stop` | The person asks to stop a ticket. Afterwards, the rest of the message may still be accepted as new work. |
 | `ignore` | Ordinary discussion, thanks, a quick question you answered. Give a reason. |
@@ -107,13 +107,19 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
   thing and the intended result, e.g. "On it: renaming the settings button from 'Save changes'
   to 'Save'." Never write a generic "I'll handle it". Post the returned `post` text **once**, as
   your reply to the message.
-- **One request, one ticket.** Never split a request into steps; the worker does that.
+- **One request, one ticket.** Never split a sequence of steps into tickets; the worker does that.
 - **Several separate requests in one message: one ticket each, in one accept.** Put them in
   `tickets`, one entry per request, each with `title`, `name`, `type`, `scope` and, if needed,
   `note` and `requirements`. `scope` is one sentence that names the part of the message the
   ticket owns. The tickets run in parallel, and each worker knows its siblings. Write one
-  `acknowledgement` that names all of them. Split only requests that stand on their own: when one
-  needs the result of another, it is one ticket.
+  `acknowledgement` that names all of them.
+- **Parallel parts, then a step that needs their results (fan-out, fan-in):** one ticket per
+  part, and one ticket for the step. Give that ticket `after`: the `name`s of the entries whose
+  results it needs. Example: "run task X with tool A and with tool B, then compare output and
+  tokens" makes three tickets: `run-a`, `run-b`, and `compare` with `after: ["run-a", "run-b"]`.
+  The parts run in parallel. The step starts when they ended (a writer's branch is merged first),
+  and its brief points to their reports. Split like this only when at least two parts can run in
+  parallel. A chain where each step needs the one before it stays one ticket.
 - **A request that needs a decision first:** if the request leaves open a choice only the person
   can make (an unsettled design, a choice between products), ask that single question instead of
   accepting a guess.
