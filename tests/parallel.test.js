@@ -277,3 +277,91 @@ describe("merge tickets", () => {
     assert.equal(f.launch[0].ticket, "merge");
   });
 });
+
+describe("tickets that need the results of others (after)", () => {
+  const BENCH = {
+    kind: "accept", acknowledgement: "On it: running the task with caveman and with pi-mumble, then comparing output and tokens.",
+    tickets: [
+      { title: "Run with caveman", name: "run caveman", type: "research", scope: "run the task with caveman and record output and token use" },
+      { title: "Run with pi-mumble", name: "run mumble", type: "research", scope: "run the task with pi-mumble and record output and token use" },
+      { title: "Compare", name: "compare", type: "analysis", scope: "compare the output and token use of both runs", after: ["run caveman", "run-mumble"] },
+    ],
+  };
+  const done = "state: ready\nsummary: Output and tokens recorded.\nhuman_action: none\n---\nEvidence.";
+
+  it("fan-out, fan-in: the parts run in parallel, the step starts after both ended and reads their reports", async () => {
+    const env = await setup();
+    const { r, out } = await accept(env, "Run it with caveman and with pi-mumble, then compare output and token usage.", BENCH);
+    assert.equal(r.ok, true, r.error);
+    assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["run-caveman", "run-mumble"], "compare waits");
+    assert.deepEqual(env.state().tickets.compare.after, ["run-caveman", "run-mumble"]);
+    assert.match(env.brief("run-caveman", 1), /- compare \(analysis\): .* \(starts after run-caveman, run-mumble\)/);
+    const l = await env.call("ticket", { action: "list" });
+    assert.match(l.open.join("\n"), /compare .* · waits for run-caveman, run-mumble/);
+    env.report("run-caveman", 1, done);
+    const a = await env.call("ticket", { action: "report", ticket: "run-caveman", turn: 1 });
+    assert.equal(a.launch, undefined, "one part is still open");
+    env.report("run-mumble", 1, done);
+    const b = await env.call("ticket", { action: "report", ticket: "run-mumble", turn: 1 });
+    assert.deepEqual(b.launch.map((x) => x.ticket), ["compare"]);
+    const brief = env.brief("compare", 1);
+    assert.match(brief, /## Results you build on/);
+    assert.match(brief, /- run-caveman \(research, completed\)[^\n]*\n  report: `\.superagent\/tickets\/run-caveman\/report-1\.md`: Output and tokens recorded\./);
+    assert.match(brief, /- run-mumble \(research, completed\)/);
+    const read = await env.call("ticket", { action: "read", ticket: "compare" });
+    assert.deepEqual(read.waitsFor, []);
+  });
+
+  it("a stopped part releases the step, whose brief says it did not complete", async () => {
+    const env = await setup();
+    await accept(env, "bench", BENCH);
+    env.report("run-caveman", 1, done);
+    await env.call("ticket", { action: "report", ticket: "run-caveman", turn: 1 });
+    const stop = await env.call("intake", { text: "stop the pi-mumble run" });
+    const s = await env.call("route", { decisions: [{ kind: "stop", trigger_id: stop.trigger_id, ticket_id: "run-mumble" }] });
+    assert.deepEqual((s.launch || []).map((x) => x.ticket), ["compare"]);
+    assert.match(env.brief("compare", 1), /- run-mumble \(research, stopped\)/);
+    assert.match(env.brief("compare", 1), /report blocked and name that ticket/);
+  });
+
+  it("writers: the parts merge first, then the step starts from the merged checkout", async () => {
+    const env = await setup({ isolation: "worktree" });
+    const W = {
+      kind: "accept", acknowledgement: "On it.",
+      tickets: [
+        { title: "A", name: "part a", type: "code", scope: "part a" },
+        { title: "B", name: "part b", type: "code", scope: "part b" },
+        { title: "C", name: "glue", type: "code", scope: "glue a and b", after: ["part a", "part b"] },
+      ],
+    };
+    const { out } = await accept(env, "a and b, then glue them", W);
+    assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["part-a", "part-b"]);
+    env.report("part-a", 1, ready());
+    await env.call("ticket", { action: "report", ticket: "part-a", turn: 1 });
+    env.report("part-b", 1, ready());
+    const b = await env.call("ticket", { action: "report", ticket: "part-b", turn: 1 });
+    assert.deepEqual(b.launch.map((x) => x.ticket), ["merge"], "the waiting sibling does not hold the merge");
+    assert.deepEqual(env.state().tickets.merge.merges, ["part-a", "part-b"]);
+    env.report("merge", 1, "state: ready\nsummary: Landed.\nhuman_action: none\n---\nok");
+    const m = await env.call("ticket", { action: "report", ticket: "merge", turn: 1 });
+    assert.deepEqual(m.launch.map((x) => x.ticket), ["glue"]);
+    assert.match(env.brief("glue", 1), /- part-a \(code, completed\)[^\n]*\n[^\n]*Its changes are merged into the main checkout\./);
+  });
+
+  it("refuses unknown names, a ticket that waits for itself, loops and after without tickets", async () => {
+    const env = await setup();
+    const bad = async (tickets, re) => {
+      const { r } = await accept(env, `msg ${Math.random()}`, { ...BENCH, tickets });
+      assert.equal(r.ok, false);
+      assert.match(r.error, re);
+    };
+    const [x, y] = BENCH.tickets;
+    await bad([x, { ...y, after: ["nope"] }], /tickets\[1\]: after names "nope"/);
+    await bad([x, { ...y, after: ["run mumble"] }], /cannot wait for itself/);
+    await bad([{ ...x, after: ["run mumble"] }, { ...y, after: ["run caveman"] }], /loop/);
+    const { r } = await accept(env, "single", { ...one("solo"), after: ["x"] });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /after is only for tickets\[\]/);
+    assert.deepEqual(Object.keys(env.state().tickets), [], "no half-made tickets");
+  });
+});
