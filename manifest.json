@@ -16,15 +16,15 @@
 		"en": {
 			"name": "LLM Superagent",
 			"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
-			"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and the code, research, analysis and review workers can run shell commands, with the permissions PI-Desktop grants sub-agents. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings."
+			"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and every worker can run shell commands, with the permissions PI-Desktop grants sub-agents. Workers that change files run in parallel, each in its own git worktree under .superagent/worktrees on a local superagent/<ticket> branch; a merge worker then lands the branches in your checkout as uncommitted changes. Without git they run one at a time. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings."
 		},
 		"zh-CN": {
 			"name": "LLM 超级智能体",
 			"description": "适用于任何大模型的自主团队：你的智能体把每个请求转为一张工单，交给一个工作子智能体（代码、调研、分析、审查、文档），并从你的模型列表中挑选最适合该任务类型和要求的模型来运行。",
-			"safetyNotes": "智能体工具加一个技能；不访问网络，插件本身不运行任何进程。agent.prompt.inject 用于为 Skill 工具索引 LLM 超级智能体技能。agent.tool.register 注册七个由编排智能体调用的工具（superagent_config、superagent_models、superagent_intake、superagent_route、superagent_eval_decide、superagent_reply、superagent_ticket）。models.list 读取你在已登录的模型中启用给子智能体的那些模型（从不读取任何密钥），用于为每个工作者挑选模型。fs.read 与 fs.write 仅限工作区中的 .superagent/**，团队在其中保存状态、工作简报和报告。在宿主文件 API 之外，插件仅用 Node fs 做以下事情：加载时将五个 superagent-worker-*.md 子智能体复制到 ~/.agents/subagents（PI-Desktop 唯一加载子智能体的位置），卸载时删除它们（你修改过的除外），以及读取插件自带的默认团队章节。工作者是普通的 PI-Desktop 子智能体：代码和文档工作者可以编辑工作区文件，代码、调研、分析和审查工作者可以运行 shell 命令，权限与 PI-Desktop 授予子智能体的相同。策略、角色模型、特性覆盖、排除项、备注、并发数和团队章节均保存在插件设置中。"
+			"safetyNotes": "智能体工具加一个技能；不访问网络，插件本身不运行任何进程。agent.prompt.inject 用于为 Skill 工具索引 LLM 超级智能体技能。agent.tool.register 注册七个由编排智能体调用的工具（superagent_config、superagent_models、superagent_intake、superagent_route、superagent_eval_decide、superagent_reply、superagent_ticket）。models.list 读取你在已登录的模型中启用给子智能体的那些模型（从不读取任何密钥），用于为每个工作者挑选模型。fs.read 与 fs.write 仅限工作区中的 .superagent/**，团队在其中保存状态、工作简报和报告。在宿主文件 API 之外，插件仅用 Node fs 做以下事情：加载时将五个 superagent-worker-*.md 子智能体复制到 ~/.agents/subagents（PI-Desktop 唯一加载子智能体的位置），卸载时删除它们（你修改过的除外），以及读取插件自带的默认团队章节。工作者是普通的 PI-Desktop 子智能体：代码和文档工作者可以编辑工作区文件，所有工作者都可以运行 shell 命令，权限与 PI-Desktop 授予子智能体的相同。修改文件的工作者并行运行，各自在 .superagent/worktrees 下自己的 git 工作树中、在本地 superagent/<工单> 分支上工作；随后由合并工作者把这些分支作为未提交的更改合入你的检出目录。没有 git 时，它们一次只运行一个。策略、角色模型、特性覆盖、排除项、备注、并发数和团队章节均保存在插件设置中。"
 		}
 	},
-	"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and the code, research, analysis and review workers can run shell commands, with the permissions PI-Desktop grants sub-agents. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings.",
+	"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds seven tools the orchestrating agent calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket). models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-worker-*.md sub-agents to ~/.agents/subagents on load (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and every worker can run shell commands, with the permissions PI-Desktop grants sub-agents. Workers that change files run in parallel, each in its own git worktree under .superagent/worktrees on a local superagent/<ticket> branch; a merge worker then lands the branches in your checkout as uncommitted changes. Without git they run one at a time. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings.",
 	"changelog": "The plugin now describes itself in Chinese too and is licensed under Apache-2.0, like its sibling plugins.",
 	"contributes": {
 		"skills": [
@@ -98,9 +98,18 @@
 							"type": "boolean",
 							"description": "set: pause or resume processing (evals, launches, replies); messages are still recorded"
 						},
+						"isolation": {
+							"type": "string",
+							"enum": [
+								"auto",
+								"worktree",
+								"serial"
+							],
+							"description": "set: how workers that change files avoid collisions. auto (default): each in its own git worktree once a worker confirms git, merged by a merge worker; one at a time before that or without git. worktree: worktrees from the start. serial: one at a time in the shared checkout"
+						},
 						"roleModels": {
 							"type": "object",
-							"description": "set: { taskType: [model, fallback, …] } pins; [] removes a pin"
+							"description": "set: { taskType: [model, fallback, …] } pins (task types plus merge); [] removes a pin"
 						},
 						"profiles": {
 							"type": "object",
@@ -218,7 +227,7 @@
 			},
 			{
 				"name": "superagent_route",
-				"description": "LLM Superagent: decide waiting candidates, one item each: accept (new ticket, explicit requests only), attach (to a ticket the message points at), stop (a ticket, at the person's request) or ignore (with a reason). Items are processed independently. Use only from the llm-superagent skill.",
+				"description": "LLM Superagent: decide waiting candidates, one item each: accept (new ticket, or one ticket per separate request with tickets[]; explicit requests only), attach (to a ticket the message points at), stop (a ticket, at the person's request) or ignore (with a reason). Items are processed independently. Use only from the llm-superagent skill.",
 				"risk": "low",
 				"schema": {
 					"type": "object",
@@ -285,6 +294,54 @@
 									"scope": {
 										"type": "string",
 										"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
+									},
+									"tickets": {
+										"type": "array",
+										"description": "accept: when the message holds several separate requests, one entry per request (2–8); they run in parallel. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them",
+										"items": {
+											"type": "object",
+											"properties": {
+												"title": {
+													"type": "string",
+													"description": "accept: a short label of the original request, at most 200 characters; no added requirements"
+												},
+												"name": {
+													"type": "string",
+													"description": "accept: a short English name; it becomes the ticket id"
+												},
+												"note": {
+													"type": "string",
+													"description": "accept and attach: optional routing background or an explicit constraint of the person, at most 30 words; never instructions"
+												},
+												"type": {
+													"type": "string",
+													"enum": [
+														"code",
+														"debug",
+														"test",
+														"research",
+														"analysis",
+														"review",
+														"docs"
+													],
+													"description": "accept: the type of task, which picks the worker and its model"
+												},
+												"requirements": {
+													"type": "object",
+													"description": "Optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids whose model family to avoid], prefer [globs], avoid [globs]"
+												},
+												"scope": {
+													"type": "string",
+													"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
+												}
+											},
+											"required": [
+												"title",
+												"name",
+												"type",
+												"scope"
+											]
+										}
 									}
 								},
 								"required": [
@@ -449,7 +506,7 @@
 			},
 			{
 				"name": "superagent_ticket",
-				"description": "LLM Superagent: list (what needs the person first), read, report (record a worker turn when its sub-agent returns), retry, recover (a turn lost to a restart), status, note, unsubscribe (a thread), requeue (a message to Eval), dismiss (an unavailable decision). Use only from the llm-superagent skill.",
+				"description": "LLM Superagent: list (what needs the person first), read, report (record a worker turn when its sub-agent returns), retry, recover (a turn lost to a restart), status, note, unsubscribe (a thread), requeue (a message to Eval), dismiss (an unavailable decision), merge (queue unmerged branches again). Use only from the llm-superagent skill.",
 				"risk": "low",
 				"schema": {
 					"type": "object",
@@ -466,7 +523,8 @@
 								"note",
 								"unsubscribe",
 								"requeue",
-								"dismiss"
+								"dismiss",
+								"merge"
 							]
 						},
 						"ticket": {
@@ -544,6 +602,13 @@
 				"description": "Pause processing: messages are recorded, nothing is evaluated, launched or sent.",
 				"type": "boolean",
 				"default": false
+			},
+			{
+				"key": "isolation",
+				"title": "Isolation of workers that change files",
+				"description": "auto: each code or docs worker works in its own git worktree once a worker confirms git, and a merge worker lands the branches in your checkout; one at a time before that or without git. worktree: worktrees from the start. serial: one at a time in your checkout.",
+				"type": "string",
+				"default": "auto"
 			},
 			{
 				"key": "roleModels",

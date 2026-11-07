@@ -21,7 +21,12 @@
  *   superagent_route        accept | attach | stop | ignore for explicit candidates
  *   superagent_eval_decide  rule assessment of a proactive (inferred) candidate
  *   superagent_reply        purpose-checked messages to the person
- *   superagent_ticket       list | read | report | retry | status | note | unsubscribe | requeue | dismiss
+ *   superagent_ticket       list | read | report | retry | status | note | unsubscribe | requeue | dismiss | merge
+ *
+ * One message may start several tickets, which run in parallel. Workers that change files never share a checkout:
+ * each works in its own git worktree on branch superagent/<ticket>, and a ready branch is queued for a merge ticket
+ * that lands the branches in the person's checkout, one merge at a time. Until a worker confirms git, and in a
+ * workspace without git, such workers run one at a time in the shared checkout instead.
  *
  * State lives in the workspace under .superagent/ (host pi.fs, manifest scope). node:fs is used
  * only to install the worker personas in ~/.agents/subagents, remove them on unload, and read this
@@ -38,15 +43,21 @@ const TRAITS = ["reasoning", "coding", "writing", "context", "speed", "cost"];
 const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 const TASK_TYPES = {
-  code: { agent: "superagent-worker-code", weights: { coding: 5, reasoning: 3, context: 2 }, thinking: "medium", about: "implement a change: feature, fix, refactor" },
-  debug: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 5, context: 2 }, thinking: "high", about: "find and fix the root cause of a failure" },
-  test: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 2, speed: 2, cost: 1 }, thinking: "medium", about: "write or repair tests" },
+  code: { agent: "superagent-worker-code", weights: { coding: 5, reasoning: 3, context: 2 }, thinking: "medium", about: "implement a change: feature, fix, refactor", writes: true },
+  debug: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 5, context: 2 }, thinking: "high", about: "find and fix the root cause of a failure", writes: true },
+  test: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 2, speed: 2, cost: 1 }, thinking: "medium", about: "write or repair tests", writes: true },
   research: { agent: "superagent-worker-research", weights: { reasoning: 3, context: 4, speed: 2, cost: 1 }, thinking: "medium", about: "investigate code, docs or behaviour and answer with evidence; read-only" },
   analysis: { agent: "superagent-worker-analysis", weights: { reasoning: 5, context: 3, coding: 1 }, thinking: "high", about: "design, tradeoff, data or root-cause analysis; read-only" },
   review: { agent: "superagent-worker-review", weights: { reasoning: 5, coding: 3, context: 3 }, thinking: "high", about: "review a change or another ticket's result for defects; read-only" },
-  docs: { agent: "superagent-worker-docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose" },
+  docs: { agent: "superagent-worker-docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose", writes: true },
+  // internal: started by the plugin, never accepted from a message
+  merge: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 4, context: 2 }, thinking: "medium", about: "land finished ticket branches in the person's checkout and resolve their conflicts", writes: true, internal: true },
 };
 const AGENTS = [...new Set(Object.values(TASK_TYPES).map((t) => t.agent))];
+/** Task types a decision may accept; `merge` is the plugin's own. */
+const ACCEPT_TYPES = Object.keys(TASK_TYPES).filter((k) => !TASK_TYPES[k].internal);
+/** Ticket types that change files: each runs in its own git worktree, or alone in the shared checkout. */
+const writes = (t) => !!TASK_TYPES[t.type].writes;
 const MARKER = "Use only from the llm-superagent skill.";
 
 const SOURCE = "chat";
@@ -67,6 +78,9 @@ const NOTE_FACT_WORDS = 100; // a note about other work
 const DEFAULT_WORKERS = 3;
 const MAX_WORKERS = 8;
 const DEFAULT_EVAL_TIMEOUT = 120;
+const MAX_SPLIT = 8; // tickets one message may start
+const ISOLATION = ["auto", "worktree", "serial"];
+const WORKTREE_DIR = ".superagent/worktrees";
 
 const REQ_ENUMS = {
   quality: ["low", "normal", "high", "max"],
@@ -452,6 +466,7 @@ async function settings() {
   const t = Number(s.evalTimeoutSeconds);
   return {
     paused: s.paused === true,
+    isolation: ISOLATION.includes(s.isolation) ? s.isolation : "auto",
     policy: {
       mode: MODES.includes(policy.mode) ? policy.mode : "observe",
       rules: rules.map((r) => ({ id: str(r.id), name: str(r.name) || str(r.id), enabled: r.enabled !== false, instruction: str(r.instruction).trim() })),
@@ -575,6 +590,7 @@ function ticketStage(t) {
   const a = latestAssignment(t);
   const report = a && a.report && a.report.state;
   const live = a && activeTurn(a);
+  if (t.merge && t.merge.state !== "unmerged" && !live) return { stage: "working", action: "merge" };
   if (report === "ready" && !live) return { stage: "person", action: "review" };
   if ((report === "blocked" || report === "failed") && waitsForPerson(t)) return { stage: "person", action: report };
   if (!a || a.state === "pending") return { stage: "working", action: "queued" };
@@ -781,11 +797,24 @@ function addInput(state, t, input) {
   return i;
 }
 
+/** A person's message reached the ticket and no worker has read it yet. */
+function hasHumanUndelivered(t) {
+  return t.undelivered.some((id) => {
+    const i = t.inputs.find((x) => x.id === id);
+    return i && i.kind === "trigger" && i.human && !i.context;
+  });
+}
+
 /** Schedule a turn for what waits on the ticket. A held ticket (blocked or failed) wakes only for a person's message. */
 function wake(state, t, { priority = false, kind = "work" } = {}) {
   if (!liveTicket(t)) return;
   if (kind === "work" && !t.undelivered.length && t.assignments.length) return;
   if (kind === "work" && waitsForPerson(t)) return;
+  if (t.merge && t.merge.state !== "unmerged") {
+    // a branch waiting for its merge wakes only for a person; a queued branch leaves the queue, a merging one waits for the merge
+    if (kind === "work" && !hasHumanUndelivered(t)) return;
+    if (t.merge.state === "queued") delete t.merge;
+  } else if (t.merge) delete t.merge;
   let a = latestAssignment(t);
   if (!a || a.state === "ended") {
     a = { id: nextId(state, "a"), state: "pending", model: t.model, createdAt: now(), turns: [] };
@@ -799,6 +828,13 @@ function wake(state, t, { priority = false, kind = "work" } = {}) {
 function endTicket(state, cfg, t, { by, outcome, reason }, out) {
   t.ended = { at: now(), by, outcome, ...(reason ? { reason } : {}) };
   t.attention = undefined;
+  if (t.type === "merge" && outcome !== "completed" && outcome !== "dropped") {
+    // a merge that did not finish leaves its branches ready but not landed: a person decides, `merge` queues them again
+    for (const id of t.merges || []) {
+      const s = state.tickets[id];
+      if (s && s.merge && s.merge.by === t.id) s.merge = { state: "unmerged", at: now() };
+    }
+  } else if (t.merge && t.merge.state === "queued") delete t.merge;
   for (const a of t.assignments) {
     if (a.state === "ended") continue;
     for (const turn of a.turns) {
@@ -823,12 +859,87 @@ function endTicket(state, cfg, t, { by, outcome, reason }, out) {
   t.updatedAt = now();
 }
 
+// ---------- isolation: parallel writers in git worktrees, merged by a merge ticket ----------
+/** Worktrees may run side by side once a worker found git, or when the person says the workspace is a git repository. */
+const parallelWriters = (cfg, state) => cfg.isolation === "worktree" || (cfg.isolation === "auto" && state.vcs === "git");
+
+/** Fix where a writer ticket works, at its first launch: its own worktree and branch, or the shared checkout. */
+function ensureIsolation(state, cfg, t) {
+  if (t.isolation || !writes(t) || t.type === "merge") return;
+  t.isolation = cfg.isolation === "serial" || state.vcs === "none"
+    ? { mode: "shared" }
+    : { mode: "worktree", branch: `superagent/${t.id}`, path: `${WORKTREE_DIR}/${t.id}`, base: `refs/superagent/base/${t.id}` };
+}
+
+/**
+ * A turn that may not overlap another such turn: a merge or a writer in the shared checkout, which both change the
+ * person's checkout, and a worktree writer while nobody knows yet whether the workspace is a git repository.
+ */
+const exclusive = (cfg, state, t) => t.type === "merge" || (writes(t) && (!t.isolation || t.isolation.mode !== "worktree" || !parallelWriters(cfg, state)));
+
+/**
+ * Start one merge ticket for the branches that wait, unless a merge is open. A branch waits for its sibling tickets
+ * (the other parts of the same message) while they still work, so a split request lands together.
+ */
+async function scheduleMerges(state, cfg, out) {
+  if (cfg.paused) return;
+  const tickets = Object.values(state.tickets);
+  if (tickets.some((t) => t.type === "merge" && liveTicket(t))) return;
+  const queued = tickets.filter((t) => liveTicket(t) && t.merge && t.merge.state === "queued");
+  const ready = queued.filter((t) => !(t.siblings || []).some((id) => {
+    const s = state.tickets[id];
+    return s && liveTicket(s) && writes(s) && !s.merge && ticketStage(s).stage === "working";
+  }));
+  if (!ready.length) return;
+  const catalog = await loadCatalog();
+  const id = uniqueTicketId(state, "merge");
+  const ctx = routingContext(catalog.entries, cfg);
+  const { req } = normalizeRequirements({}, "merge");
+  const route = routeTask({ id, type: "merge", req }, ctx);
+  out.warnings.push(...route.warnings);
+  const ids = ready.map((t) => t.id);
+  const first = ready[0];
+  // its own thread: the person answers a merge question there
+  const key = `${SOURCE}:${id}`;
+  state.threads[key] = { key, createdAt: now(), subscriptions: [id], context: [], correlated: [], pending: [], evaluating: null, expired: 0 };
+  const t = {
+    id, title: `Merge ${ids.join(", ")}`, type: "merge", decisionId: null,
+    mandate: { strength: "explicit", policyVersion: policyVersion(cfg), basis: { via: "merge", tickets: ids }, actor: first.mandate.actor, scope: `land the ready branches of ${ids.join(", ")} in the person's checkout` },
+    channels: [key], attention: undefined, assignments: [], inputs: [], undelivered: [], answers: [], createdAt: now(), updatedAt: now(),
+    origin: { triggerId: first.origin.triggerId, triggerIds: [] }, note: "", req, merges: ids,
+    model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+    thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor("merge", req, ctx.profiles.get(m)) : route.thinking])),
+  };
+  state.tickets[id] = t;
+  for (const s of ready) s.merge = { state: "merging", by: id, at: now() };
+  wake(state, t);
+}
+
+/** A merge reported ready or dropped: its branches are landed, so their tickets complete (or first read what the person wrote meanwhile). */
+function finishMerge(state, cfg, t, rep, out) {
+  const at = now();
+  const merged = [];
+  for (const id of t.merges || []) {
+    const s = state.tickets[id];
+    if (!s || !s.merge || s.merge.by !== t.id) continue;
+    delete s.merge;
+    s.merged = { by: t.id, at };
+    merged.push({ ticket: s.id, title: s.title, summary: (latestReport(s) || {}).summary || "" });
+    if (!liveTicket(s)) continue;
+    if (hasHumanUndelivered(s)) wake(state, s, { kind: "recheck", priority: true });
+    else endTicket(state, cfg, s, { by: "executor", outcome: "completed" }, out);
+  }
+  endTicket(state, cfg, t, { by: "executor", outcome: rep.state === "ready" ? "completed" : "dropped" }, out);
+  return merged;
+}
+
 /** Launch pending turns into free slots, people's messages first; one extra slot is kept for a person or a status request. */
 async function promote(state, cfg, out) {
   if (cfg.paused) return;
   const pending = [];
   let running = 0;
   let extraUsed = false;
+  let exclusiveRunning = false;
   for (const t of Object.values(state.tickets)) {
     if (!liveTicket(t)) continue;
     for (const a of t.assignments) {
@@ -836,12 +947,17 @@ async function promote(state, cfg, out) {
         if (turn.state === "running") {
           running++;
           if (turn.extra) extraUsed = true;
+          if (exclusive(cfg, state, t)) exclusiveRunning = true;
         } else if (turn.state === "pending" && a.state !== "ended") pending.push([t, a, turn]);
       }
     }
   }
   pending.sort((x, y) => Number(y[2].priority) - Number(x[2].priority) || x[2].seq - y[2].seq);
   for (const [t, a, turn] of pending) {
+    if (t.merge && t.merge.state === "merging") continue; // its branch is being merged: the turn waits
+    ensureIsolation(state, cfg, t);
+    const excl = exclusive(cfg, state, t);
+    if (excl && exclusiveRunning) continue;
     let extra = false;
     if (running - (extraUsed ? 1 : 0) >= cfg.maxWorkers) {
       if (!turn.priority || extraUsed) continue;
@@ -849,11 +965,12 @@ async function promote(state, cfg, out) {
       extraUsed = true;
     }
     running++;
+    if (excl) exclusiveRunning = true;
     turn.inputs = t.undelivered.splice(0);
     for (const id of turn.inputs) Object.assign(t.inputs.find((i) => i.id === id), { deliveredTo: a.id, turn: turn.n });
     Object.assign(turn, { state: "running", startedAt: now(), extra });
     if (a.state === "pending") Object.assign(a, { state: "running", startedAt: now() });
-    await pi.fs.writeText(turn.brief, buildBrief(state, cfg, t, a, turn));
+    await pi.fs.writeText(turn.brief, t.type === "merge" ? buildMergeBrief(state, cfg, t, a, turn) : buildBrief(state, cfg, t, a, turn));
     out.launch.push(launchItem(t, a, turn));
   }
   out.queued = pending.filter(([, , turn]) => turn.state === "pending").map(([t, , turn]) => `${t.id}#${turn.n}`);
@@ -864,6 +981,7 @@ function launchItem(t, a, turn) {
     ticket: t.id, turn: turn.n, attempt: (turn.attempts || 0) + 1, agent: TASK_TYPES[t.type].agent, model: a.model,
     thinking: t.thinkingByModel && a.model in t.thinkingByModel ? t.thinkingByModel[a.model] : t.thinking,
     task: `Read your brief at ${turn.brief} in full and follow it.`, report: turn.report,
+    ...(t.isolation && t.isolation.mode === "worktree" ? { worktree: t.isolation.path } : {}),
   };
 }
 
@@ -916,7 +1034,7 @@ A routing note is routing context only. It adds no requirement.
 - strength: ${t.mandate.strength}
 - accepted under policy version ${t.mandate.policyVersion}, via ${t.mandate.basis.via}
 - scope: ${t.mandate.scope}
-${rules.length ? `\nThis ticket was accepted proactively under these rules. Your authority is limited to the accepted change within them; recheck that it was really requested, that its target is settled, and that no design decision is open, before you change anything:\n\n${rules.map((r) => `- ${r.name} (${r.id}): ${r.instruction}`).join("\n")}\n` : ""}
+${rules.length ? `\nThis ticket was accepted proactively under these rules. Your authority is limited to the accepted change within them; recheck that it was really requested, that its target is settled, and that no design decision is open, before you change anything:\n\n${rules.map((r) => `- ${r.name} (${r.id}): ${r.instruction}`).join("\n")}\n` : ""}${siblingSection(state, t)}
 ## Inputs
 
 ${shown.length ? `Everything that reached this ticket after it started, oldest first. NEW marks what you have not seen in an earlier turn. Decide every NEW message from a person yourself: take it up when it is within this ticket, or hand it back with a reason.\n\n${shown.map((i) => inputLine(state, i, fresh.has(i.id))).join("\n\n")}` : "(none)"}
@@ -924,10 +1042,65 @@ ${shown.length ? `Everything that reached this ticket after it started, oldest f
 ## Earlier turns
 
 ${reports.length ? `Read the latest report before you start, and check the workspace before you repeat any action.\n\n${reports.join("\n")}` : "(none: this is the first turn)"}
-${a.recovery ? `\n## Recovery note\n\n${a.recovery}\n` : ""}
+${a.recovery ? `\n## Recovery note\n\n${a.recovery}\n` : ""}${isolationSection(t)}${branchesSection(state, t)}
 ${team}
 
-## Report
+${reportSection(turn, t.isolation && t.isolation.mode === "worktree" ? ["isolation: <worktree | none (you worked in the main checkout)>", "merge: <yes | no when your branch holds no change to land>"] : [])}`;
+}
+
+/** The other tickets one message started: each worker keeps to its own part. */
+function siblingSection(state, t) {
+  const sibs = (t.siblings || []).map((id) => state.tickets[id]).filter(Boolean);
+  if (!sibs.length) return "";
+  return `\n## Split request\n\nThe original request asks for several separate things, so it started several tickets that run in parallel. Your part is the scope of your Mandate. These tickets own the other parts: leave them alone, and do not report their work as missing.\n\n${sibs.map((s) => `- ${s.id} (${s.type}): ${s.mandate.scope}`).join("\n")}\n\n`;
+}
+
+/** Where a writer works: its own git worktree and branch, or the shared checkout while no other writer runs. */
+function isolationSection(t) {
+  const iso = t.isolation;
+  if (!iso) return "";
+  if (iso.mode === "shared") return "\n## Workspace\n\nYou work in the main checkout of the workspace. No other worker changes files while your turn runs.\n";
+  return `
+## Workspace isolation
+
+Other workers can change files at the same time as you. So this ticket works in its own git worktree, on its own branch. Never change files in the main checkout.
+
+- worktree: \`${iso.path}\` (relative to the workspace root)
+- branch: \`${iso.branch}\`
+- base ref: \`${iso.base}\`, the state your branch starts from. It includes the uncommitted changes the person had at that time.
+
+1. **Set up the worktree** from the workspace root before you change anything. The script skips what an earlier turn already did:
+
+   \`\`\`sh
+   git rev-parse --is-inside-work-tree   # fails: not a git repository, see step 6
+   x="$(git rev-parse --git-common-dir)/info/exclude"; grep -qxF '.superagent/' "$x" 2>/dev/null || echo '.superagent/' >> "$x"
+   if ! git show-ref --verify --quiet refs/heads/${iso.branch}; then
+     base=$(git stash create); [ -n "$base" ] || base=$(git rev-parse HEAD)
+     git update-ref ${iso.base} "$base" && git worktree add -b ${iso.branch} ${iso.path} ${iso.base}
+   elif [ ! -e ${iso.path}/.git ]; then
+     git worktree prune && git worktree add ${iso.path} ${iso.branch}
+   fi
+   \`\`\`
+
+   The worktree does not contain the person's untracked files: copy the ones you need. It also has no ignored files, such as installed dependencies or build output: install or link them as the project needs.
+2. **Work only in the worktree.** Read and edit the files under \`${iso.path}/\`, and run every command there (\`cd ${iso.path} && …\`).
+3. **Commit your work on your branch** before you report \`ready\`. These local commits are part of the isolation and are always allowed. Never push, and never change another branch or the main checkout.
+4. **Do not merge.** When you report \`ready\`, a merge worker lands your branch in the person's checkout, together with the work of the other workers.
+5. Before you report \`dropped\`, or \`ready\` with \`merge: no\`, remove your worktree and branch: \`git worktree remove --force ${iso.path}; git branch -D ${iso.branch}; git update-ref -d ${iso.base}\`.
+6. If the workspace is not a git repository, or git cannot make the worktree, work in the main checkout as usual and write \`isolation: none\` in your report.
+`;
+}
+
+/** For read-only workers: the work that sits on ticket branches and is not in the main checkout yet. */
+function branchesSection(state, t) {
+  if (writes(t)) return "";
+  const open = Object.values(state.tickets).filter((s) => s.id !== t.id && liveTicket(s) && s.isolation && s.isolation.mode === "worktree");
+  if (!open.length) return "";
+  return `\n## Ticket branches\n\nThese tickets work in their own git worktrees. Their changes are not in the main checkout until a merge lands them. To see the work of a ticket, read its worktree, or run \`git diff <base ref> <branch>\` from the workspace root.\n\n${open.map((s) => `- ${s.id} [${stageLabel(s)}]: branch \`${s.isolation.branch}\`, worktree \`${s.isolation.path}\`, base ref \`${s.isolation.base}\``).join("\n")}\n`;
+}
+
+function reportSection(turn, extra = []) {
+  return `## Report
 
 Before you finish, write \`${turn.report}\` with a single Write, in exactly this form:
 
@@ -941,12 +1114,67 @@ acked: <ids of NEW messages you took up as part of this ticket, comma-separated,
 handback: <id: one-sentence reason; for each NEW message beyond this ticket, separated by ;, or none>
 unrelated: <thread key: one-sentence reason, for a thread attached to this ticket that is not about it, or none>
 follow: <thread key: how it relates, for a thread you want to follow for context only, or none>
----
+${extra.map((l) => `${l}\n`).join("")}---
 <full evidence: what changed (files), checks actually run and their results, risks, what remains>
 \`\`\`
 
 Then reply with only the state line.
 `;
+}
+
+/** The brief of a merge ticket: land every listed branch in the person's checkout, as one working change. */
+function buildMergeBrief(state, cfg, t, a, turn) {
+  const spec = TASK_TYPES.merge;
+  // only the branches still waiting for this merge: a landed one is gone
+  const items = (t.merges || []).map((id) => state.tickets[id]).filter((s) => s && s.isolation && s.isolation.mode === "worktree" && s.merge && s.merge.by === t.id);
+  const fresh = new Set(turn.inputs);
+  const reports = ticketTurns(t).filter((x) => x.reportState).map((x) => `- turn ${x.n}: ${x.reportState}: ${x.summary || "(no summary)"} (${x.report})`);
+  const branch = (s) => {
+    const origin = state.triggers[s.origin.triggerId];
+    const last = [...ticketTurns(s)].reverse().find((x) => x.reportState === "ready");
+    return `### ${s.id}: ${s.title}\n\n- branch: \`${s.isolation.branch}\`\n- base ref: \`${s.isolation.base}\`\n- worktree: \`${s.isolation.path}\`\n- scope: ${s.mandate.scope}\n- report: \`${last ? last.report : "(none)"}\`${last && last.summary ? `: ${last.summary}` : ""}\n\nOriginal request (message ${origin.id}):\n\n${quote(origin.text)}`;
+  };
+  const delivery = teamText(cfg, "delivery");
+  return `# Ticket ${t.id} · turn ${turn.n}: ${t.title}
+
+You are \`${spec.agent}\`, here as the **merge worker**. Type: merge (${spec.about}). Model: ${a.model}. Assignment: ${a.id}. Prompt revision: ${cfg.promptRevision}.
+
+Workers did the tickets below in parallel, each in its own git worktree, on its own branch, and reported them ready. Your job: land all of them in the person's checkout (the workspace root) as one coherent change that works. You do not add features and you do not redo their work.
+
+## Branches to land, in this order
+
+${items.length ? items.map(branch).join("\n\n") : "(none: report dropped)"}
+
+## How to merge
+
+1. Read the report of each ticket, so you know what it changed and why.
+2. From the workspace root, land each branch in order. Its change is the diff from its base ref to its branch tip. The base already holds the uncommitted changes the person had then, so you apply only the work of the ticket:
+
+   \`\`\`sh
+   git diff --binary <base ref> <branch> | git apply --3way
+   \`\`\`
+
+   If git refuses because the person has local changes in those files, use \`git apply --reject\` and apply each \`.rej\` hunk by hand, then delete the \`.rej\` files.
+3. Resolve every conflict so that the intent of each ticket stays. Use the reports and the original requests. Never drop the change of a ticket. Never discard, stash, reset or overwrite the person's own changes. If a conflict needs a choice that only the person can make, report \`waiting\` with that one question.
+4. Leave the result as uncommitted changes in the working tree. Unstage what \`git apply --3way\` staged, unless the person had staged changes in the same files. Commit only when an original request or the Delivery requirements ask for it.
+5. When all branches are in, run the relevant build, linter and tests in the main checkout, and fix what the combination broke.
+6. Only when you report \`ready\` or \`dropped\`, clean up each landed branch: \`git worktree remove --force <worktree>; git branch -D <branch>; git update-ref -d <base ref>\`. Keep every branch when you stop for another reason.
+
+Report \`ready\` when every branch is landed and checked, and \`dropped\` only when no branch held a change to land. The summary is one sentence about the combined outcome the person can use now. In the evidence, give for each ticket what landed, each conflict and how you resolved it, and the checks you ran with their results.
+${a.recovery ? `\n## Recovery note\n\n${a.recovery}\n` : ""}
+## Earlier turns
+
+${reports.length ? `Read the latest report and check \`git status\` before you repeat any action: an earlier turn may have landed some branches already.\n\n${reports.join("\n")}` : "(none: this is the first turn)"}
+
+## Inputs
+
+${t.inputs.length ? t.inputs.map((i) => inputLine(state, i, fresh.has(i.id))).join("\n\n") : "(none)"}
+
+## Delivery requirements
+
+${delivery || "(none)"}
+
+${reportSection(turn)}`;
 }
 
 /** Parse a worker report: `key: value` header lines up to `---`, then the evidence. */
@@ -979,6 +1207,9 @@ function parseReport(text) {
     handback: pairs("handback"),
     unrelated: pairs("unrelated"),
     follow: pairs("follow"),
+    // writers in a worktree: where they worked, and whether their branch holds a change to land (null: not said)
+    isolation: str(head.isolation).toLowerCase().trim() || null,
+    merge: "merge" in head ? !/^(no|none|false|nothing)\b/i.test(str(head.merge).trim()) : null,
     body: lines.slice(i).join("\n").trim(),
   };
 }
@@ -998,6 +1229,15 @@ function handBack(state, cfg, t, triggerId, reason, out) {
   (d.handbacks ||= []).push({ ticketId: t.id, reason, at: now() });
   if (!followupOwners(state, tr).length) toEval(state, cfg, tr, out);
   return true;
+}
+
+/** A writer's report says where it worked: git found means worktrees may run side by side; no git means one writer at a time. */
+function learnIsolation(state, t, rep) {
+  if (!writes(t) || t.type === "merge" || !t.isolation || t.isolation.mode !== "worktree") return;
+  if (/^(none|shared|no\b)/.test(rep.isolation || "")) {
+    t.isolation = { mode: "shared" };
+    if (state.vcs !== "git") state.vcs = "none";
+  } else if (/^worktree/.test(rep.isolation || "")) state.vcs = "git";
 }
 
 function freshOut() {
@@ -1100,6 +1340,7 @@ async function withState(fn) {
     recoverStale(state, cfg, out);
   }
   const value = await fn(state, cfg, out);
+  await scheduleMerges(state, cfg, out);
   await promote(state, cfg, out);
   // stages as they stand after the launch
   const refresh = (v) => {
@@ -1125,9 +1366,10 @@ function checkWords(text, max, what) {
   const n = wordCount(text);
   if (n > max) fail(`${what} has ${n} words; the limit is ${max}`);
 }
-function uniqueTicketId(state, base) {
-  if (!state.tickets[base]) return base;
-  for (let i = 2; ; i++) if (!state.tickets[`${base}-${i}`]) return `${base}-${i}`;
+function uniqueTicketId(state, base, reserved = new Set()) {
+  const free = (id) => !state.tickets[id] && !reserved.has(id);
+  if (free(base)) return base;
+  for (let i = 2; ; i++) if (free(`${base}-${i}`)) return `${base}-${i}`;
 }
 
 /** The Eval a candidate's trigger belongs to, refusing stale or unknown ones. */
@@ -1149,55 +1391,82 @@ function evalOf(state, cfg, triggerId, out) {
   return { tr, thread, ev };
 }
 
-/** Accept: a ticket with its Mandate, subscribed to the batch's threads, its model picked by type and requirements. */
+/**
+ * Accept: one ticket per separate request of the message (`fields.tickets`), or one ticket for the whole message.
+ * Each ticket gets its own Mandate scope and model, and is subscribed to the batch's threads. Everything is
+ * checked before anything is written, so a bad item leaves no half-made tickets.
+ */
 function createTicket(state, cfg, catalog, thread, ev, fields, out) {
   const earlier = Object.values(state.tickets).find((x) => x.origin.triggerIds.includes(ev.primary));
   if (earlier) fail(`message ${ev.primary} already started ticket ${earlier.id}; attach to it or ignore`);
-  const type = str(fields.type).trim();
-  if (!TASK_TYPES[type]) fail(`type must be one of ${Object.keys(TASK_TYPES).join(", ")}`);
-  const title = str(fields.title).trim();
-  if (!title || title.length > 200) fail("title is required: a short label of the original request, at most 200 characters");
-  const note = str(fields.note).trim();
-  checkWords(note, NOTE_WORDS, "the routing note");
+  const split = Array.isArray(fields.tickets) && fields.tickets.length > 0;
+  if (split && fields.tickets.length > MAX_SPLIT) fail(`tickets holds at most ${MAX_SPLIT} requests`);
+  if (split && fields.rules) fail("a proactive accept starts one ticket");
+  const specs = split ? fields.tickets.map((x) => (isObj(x) ? x : {})) : [fields];
   const ack = str(fields.acknowledgement).trim();
-  if (fields.requireAck && !ack) fail("acknowledgement is required: one short sentence naming the concrete change and its intended result");
-  checkWords(ack, IM_WORDS, "the acknowledgement");
-  const { req, warnings } = normalizeRequirements(fields.requirements, "requirements");
-  out.warnings.push(...warnings);
-  const id = uniqueTicketId(state, slug(fields.name || title));
   const ctx = routingContext(catalog.entries, cfg);
   for (const t of Object.values(state.tickets)) ctx.chosen.set(t.id, t.model);
-  const route = routeTask({ id, type, req }, ctx);
-  out.warnings.push(...route.warnings);
-  const mandate = {
-    strength: ev.strength, policyVersion: ev.policyVersion,
-    basis: { ...ev.basis, ...(fields.rules ? { rules: fields.rules } : {}) },
-    actor: ev.actor, scope: str(fields.scope).trim() || title,
-  };
-  const t = {
-    id, title, type, decisionId: null, mandate, channels: [thread.key], attention: undefined, assignments: [], inputs: [],
-    undelivered: [], answers: [], createdAt: now(), updatedAt: now(), origin: { triggerId: ev.primary, triggerIds: ev.triggerIds },
-    note, req, model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
-    // the suggested thinking level of every model the ticket may run on, so a failover keeps a valid one
-    thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((id) => [id, ctx.profiles.has(id) ? thinkingFor(type, req, ctx.profiles.get(id)) : route.thinking])),
-  };
-  state.tickets[id] = t;
-  for (const trId of [ev.primary, ...ev.triggerIds.filter((x) => x !== ev.primary)]) {
-    const tr = state.triggers[trId];
-    for (const key of tr.threads) if (!state.threads[key].subscriptions.includes(id)) state.threads[key].subscriptions.push(id);
-    state.dispositions[trId].fanout.push(id);
-    addInput(state, t, { kind: "trigger", triggerId: trId, human: tr.human, at: tr.at });
-  }
-  wake(state, t); // a new launch waits for a normal slot; the extra one is kept for a person's message
-  const decision = recordDecision(state, cfg, thread, ev, { kind: "accept", ticketId: id, mandate, reason: [{ code: "accepted", text: str(fields.reason) }], ...(fields.audit ? { audit: fields.audit } : {}) }, out);
-  t.decisionId = decision.id;
-  const post = [];
+  const reserved = new Set();
+  const drafts = specs.map((spec, k) => {
+    const where = split ? `tickets[${k}]: ` : "";
+    const type = str(spec.type).trim();
+    if (!ACCEPT_TYPES.includes(type)) fail(`${where}type must be one of ${ACCEPT_TYPES.join(", ")}`);
+    const title = str(spec.title).trim();
+    if (!title || title.length > 200) fail(`${where}title is required: a short label of the original request, at most 200 characters`);
+    const note = str(spec.note).trim();
+    checkWords(note, NOTE_WORDS, `${where}the routing note`);
+    const scope = str(spec.scope).trim();
+    if (split && !scope) fail(`${where}scope is required when one message starts several tickets: one sentence naming the part of the message this ticket owns`);
+    const { req, warnings } = normalizeRequirements(spec.requirements, `${where}requirements`);
+    out.warnings.push(...warnings);
+    const id = uniqueTicketId(state, slug(spec.name || title), reserved);
+    reserved.add(id);
+    const route = routeTask({ id, type, req }, ctx);
+    ctx.chosen.set(id, route.model); // a later ticket of the same message may ask for differentFrom this one
+    out.warnings.push(...route.warnings);
+    return { id, type, title, note, req, route, scope: scope || title };
+  });
+  if (fields.requireAck && !ack) fail("acknowledgement is required: one short sentence naming the concrete change and its intended result");
+  checkWords(ack, IM_WORDS, "the acknowledgement");
+  const ids = drafts.map((d) => d.id);
+  const made = drafts.map((d) => {
+    const { id, type, title, note, req, route } = d;
+    const mandate = {
+      strength: ev.strength, policyVersion: ev.policyVersion,
+      basis: { ...ev.basis, ...(fields.rules ? { rules: fields.rules } : {}) },
+      actor: ev.actor, scope: d.scope,
+    };
+    const t = {
+      id, title, type, decisionId: null, mandate, channels: [thread.key], attention: undefined, assignments: [], inputs: [],
+      undelivered: [], answers: [], createdAt: now(), updatedAt: now(), origin: { triggerId: ev.primary, triggerIds: ev.triggerIds },
+      note, req, model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+      // the suggested thinking level of every model the ticket may run on, so a failover keeps a valid one
+      thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, req, ctx.profiles.get(m)) : route.thinking])),
+      ...(split ? { siblings: ids.filter((x) => x !== id) } : {}),
+    };
+    state.tickets[id] = t;
+    for (const trId of [ev.primary, ...ev.triggerIds.filter((x) => x !== ev.primary)]) {
+      const tr = state.triggers[trId];
+      for (const key of tr.threads) if (!state.threads[key].subscriptions.includes(id)) state.threads[key].subscriptions.push(id);
+      state.dispositions[trId].fanout.push(id);
+      addInput(state, t, { kind: "trigger", triggerId: trId, human: tr.human, at: tr.at });
+    }
+    wake(state, t); // a new launch waits for a normal slot; the extra one is kept for a person's message
+    return t;
+  });
+  const decision = recordDecision(state, cfg, thread, ev, {
+    kind: "accept", ticketId: ids[0], ...(split ? { ticketIds: ids, mandates: Object.fromEntries(made.map((t) => [t.id, t.mandate])) } : { mandate: made[0].mandate }),
+    reason: [{ code: "accepted", text: str(fields.reason) }], ...(fields.audit ? { audit: fields.audit } : {}),
+  }, out);
+  for (const t of made) t.decisionId = decision.id;
   if (ack) {
     const rid = `ack:${ev.primary}`;
-    if (!state.outbox.some((r) => r.id === rid)) state.outbox.push({ id: rid, purpose: "acknowledgement", ticketId: id, triggerId: ev.primary, text: ack, at: now() });
-    post.push(ack);
+    if (!state.outbox.some((r) => r.id === rid)) state.outbox.push({ id: rid, purpose: "acknowledgement", ticketId: ids[0], ...(split ? { ticketIds: ids } : {}), triggerId: ev.primary, text: ack, at: now() });
   }
-  return { ticket: id, decision: decision.id, agent: TASK_TYPES[type].agent, model: route.model, fallbacks: route.fallbacks, thinking: route.thinking, why: route.why, ...(post.length ? { post: post[0] } : {}) };
+  const view = (d) => ({ ticket: d.id, agent: TASK_TYPES[d.type].agent, model: d.route.model, fallbacks: d.route.fallbacks, thinking: d.route.thinking, why: d.route.why });
+  const post = ack ? { post: ack } : {};
+  if (split) return { tickets: drafts.map(view), decision: decision.id, ...post };
+  return { ...view(drafts[0]), decision: decision.id, ...post };
 }
 
 function turnOf(t, n) {
@@ -1256,6 +1525,10 @@ async function superConfig(args) {
       patch.evalTimeoutSeconds = a.evalTimeoutSeconds;
     }
     if (a.paused !== undefined) patch.paused = a.paused === true;
+    if (a.isolation !== undefined) {
+      if (!ISOLATION.includes(a.isolation)) fail(`isolation must be one of ${ISOLATION.join(", ")}`);
+      patch.isolation = a.isolation;
+    }
     if (a.roleModels !== undefined) {
       if (!isObj(a.roleModels)) fail("roleModels must be { taskType: [model, …] }");
       const pins = { ...(patch.roleModels || before.pins) };
@@ -1329,6 +1602,10 @@ async function superConfig(args) {
       legend: "R reasoning, C coding, W writing, X context, S speed, $ cheapness (1–5); * = overridden in settings",
       policy: { version: policyVersion(cfg), mode: cfg.policy.mode, rules: cfg.policy.rules, allowed: sourcePart(cfg).allowed, admission: { ...ADMISSION_DEFAULTS, ...sourcePart(cfg).admission[SOURCE] } },
       paused: cfg.paused, maxWorkers: cfg.maxWorkers, evalTimeoutSeconds: cfg.evalTimeoutSeconds,
+      isolation: cfg.isolation,
+      writers: parallelWriters(cfg, state) ? "in parallel, each in its own git worktree; a merge worker lands their branches"
+        : cfg.isolation === "serial" || state.vcs === "none" ? "one at a time in the shared checkout"
+          : "one at a time until a worker confirms that the workspace is a git repository, then in parallel worktrees",
       roleModels: cfg.pins, overrides: cfg.profiles, exclude: cfg.exclude, notes: cfg.notes,
       team: Object.fromEntries(Object.keys(TEAM_KEYS).map((n) => [n, cfg.team[n] ? `custom (${cfg.team[n].length} chars)` : "default"])),
       promptRevision: cfg.promptRevision,
@@ -1669,13 +1946,16 @@ async function ticketReport(state, cfg, a, out) {
       (thread.context ||= []).push(t.id);
     }
   }
-  const human = t.undelivered.some((id) => {
-    const i = t.inputs.find((x) => x.id === id);
-    return i && i.kind === "trigger" && i.human && !i.context;
-  });
+  learnIsolation(state, t, rep);
+  const human = hasHumanUndelivered(t);
   // the person wrote while this turn ran and the worker could not read it: it reads it before the ticket ends
   const recheck = human && (rep.state === "ready" || rep.state === "dropped");
+  // a writer's ready branch waits for the merge worker; the person hears the result once it is landed
+  const toMerge = !recheck && rep.state === "ready" && t.type !== "merge" && t.isolation && t.isolation.mode === "worktree" && rep.merge !== false;
+  let merged = null;
   if (recheck) wake(state, t, { kind: "recheck", priority: true });
+  else if (t.type === "merge" && (rep.state === "ready" || rep.state === "dropped")) merged = finishMerge(state, cfg, t, rep, out);
+  else if (toMerge) t.merge = { state: "queued", at, turn: n };
   else if (rep.state === "ready") endTicket(state, cfg, t, { by: "executor", outcome: "completed" }, out);
   else if (rep.state === "dropped") endTicket(state, cfg, t, { by: "executor", outcome: "dropped" }, out);
   if (liveTicket(t) && rep.state === "progress" && turn.kind !== "status") {
@@ -1688,8 +1968,10 @@ async function ticketReport(state, cfg, a, out) {
   }
   if (liveTicket(t) && t.undelivered.length) wake(state, t, { priority: human });
   const answer = triggerOk(rep.reply_to_trigger_id) ? { trigger_id: rep.reply_to_trigger_id, summary: rep.summary } : undefined;
-  const handoff = recheck ? { kind: "none" } : handoffFor(t, rep);
-  const held = recheck ? { note: `held: the person wrote while turn ${n} ran; the worker reads it before reporting ${rep.state} again` } : {};
+  let handoff = recheck || toMerge ? { kind: "none" } : handoffFor(t, rep);
+  if (merged && merged.length) handoff = { kind: "result", summary: rep.summary, purpose: "result", merged };
+  const held = recheck ? { note: `held: the person wrote while turn ${n} ran; the worker reads it before reporting ${rep.state} again` }
+    : toMerge ? { note: `ready on branch ${t.isolation.branch}: queued for the merge worker; the result goes to the person once it is landed` } : {};
   return { ticket: t.id, stage: stageLabel(t), handoff, ...held, ...(answer ? { answer } : {}), ...(handbacks.length ? { handbacks } : {}) };
 }
 
@@ -1707,6 +1989,8 @@ async function superTicket(args) {
       attention: t.attention || null, ended: t.ended || null, threads: Object.values(state.threads).filter((th) => th.subscriptions.includes(t.id)).map((th) => th.key),
       assignments: t.assignments.map((x) => `${x.id} ${x.state}${x.endedReason ? ` (${x.endedReason})` : ""} on ${x.model}: ${x.turns.map((y) => `#${y.n} ${y.state}${y.reportState ? `/${y.reportState}` : ""}`).join(", ")}`),
       undelivered: t.undelivered.length, latestReport: latest,
+      ...(t.isolation ? { isolation: t.isolation } : {}), ...(t.merge ? { merge: t.merge } : {}), ...(t.merges ? { merges: t.merges } : {}),
+      ...(t.siblings ? { siblings: t.siblings } : {}),
     };
   }
   return withState(async (state, cfg, out) => {
@@ -1778,14 +2062,23 @@ async function superTicket(args) {
       decision.dismissed = true;
       return { decision: decision.id };
     }
-    return fail("action must be one of list, read, report, retry, recover, status, note, unsubscribe, requeue, dismiss");
+    if (action === "merge") {
+      // queue again the branches a stopped merge left unmerged: one ticket, or all of them
+      const pick = a.ticket ? [requireTicket(state, a.ticket)] : Object.values(state.tickets).filter((t) => liveTicket(t) && t.merge && t.merge.state === "unmerged");
+      for (const t of pick) if (!liveTicket(t) || !t.merge || t.merge.state !== "unmerged") fail(`${t.id} has no unmerged branch (${stageLabel(t)})`);
+      if (!pick.length) fail("no ticket has an unmerged branch");
+      for (const t of pick) t.merge = { state: "queued", at: now() };
+      return { queued: pick.map((t) => t.id) };
+    }
+    return fail("action must be one of list, read, report, retry, recover, status, note, unsubscribe, requeue, dismiss, merge");
   });
 }
 
 /** The overview: what waits for a person first, then working, queued and idle tickets; a healthy state takes no space. */
 function ticketList(state, cfg) {
-  const order = ["person/answer", "person/review", "person/blocked", "person/failed", "working", "working/queued", "idle"];
-  const line = (t) => `${t.id} [${stageLabel(t)}] ${t.type} on ${t.model}: ${t.title}${t.attention ? ` · asks: ${t.attention.question}` : ""}`;
+  const order = ["person/answer", "person/review", "person/blocked", "person/failed", "working", "working/merge", "working/queued", "idle"];
+  const line = (t) => `${t.id} [${stageLabel(t)}] ${t.type} on ${t.model}: ${t.title}${t.attention ? ` · asks: ${t.attention.question}` : ""}`
+    + `${t.merge && t.merge.state === "unmerged" ? ` · branch ${t.isolation.branch} not merged (superagent_ticket merge)` : ""}`;
   const tickets = Object.values(state.tickets);
   const open = tickets.filter(liveTicket).sort((a, b) => order.indexOf(stageLabel(a)) - order.indexOf(stageLabel(b)));
   const ended = tickets.filter((t) => !liveTicket(t)).sort((a, b) => str(b.updatedAt).localeCompare(str(a.updatedAt))).slice(0, 10);
@@ -1813,7 +2106,7 @@ const REQ_SCHEMA = {
   type: "object",
   description: "Optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids whose model family to avoid], prefer [globs], avoid [globs]",
 };
-const TYPES = Object.keys(TASK_TYPES);
+const TYPES = ACCEPT_TYPES;
 const ACCEPT_FIELDS = {
   title: { type: "string", description: "accept: a short label of the original request, at most 200 characters; no added requirements" },
   name: { type: "string", description: "accept: a short English name; it becomes the ticket id" },
@@ -1840,7 +2133,8 @@ const TOOLS = [
         maxWorkers: { type: "integer", description: `set: concurrent worker turns, 1–${MAX_WORKERS} (default ${DEFAULT_WORKERS}); one extra slot is kept for a person's message` },
         evalTimeoutSeconds: { type: "integer", description: `set: how long a candidate waits for a decision, 30–3600 (default ${DEFAULT_EVAL_TIMEOUT})` },
         paused: { type: "boolean", description: "set: pause or resume processing (evals, launches, replies); messages are still recorded" },
-        roleModels: { type: "object", description: "set: { taskType: [model, fallback, …] } pins; [] removes a pin" },
+        isolation: { type: "string", enum: ISOLATION, description: "set: how workers that change files avoid collisions. auto (default): each in its own git worktree once a worker confirms git, merged by a merge worker; one at a time before that or without git. worktree: worktrees from the start. serial: one at a time in the shared checkout" },
+        roleModels: { type: "object", description: "set: { taskType: [model, fallback, …] } pins (task types plus merge); [] removes a pin" },
         profiles: { type: "object", description: "set: { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision|reasoningModel|unstable: bool, thinking: [levels] } }; null removes" },
         exclude: { type: "array", items: { type: "string" }, description: "set: model id globs never to use" },
         include: { type: "array", items: { type: "string" }, description: "set: exclusion globs to remove" },
@@ -1883,7 +2177,7 @@ const TOOLS = [
   },
   {
     name: "superagent_route",
-    description: "LLM Superagent: decide waiting candidates, one item each: accept (new ticket, explicit requests only), attach (to a ticket the message points at), stop (a ticket, at the person's request) or ignore (with a reason). Items are processed independently. Use only from the llm-superagent skill.",
+    description: "LLM Superagent: decide waiting candidates, one item each: accept (new ticket, or one ticket per separate request with tickets[]; explicit requests only), attach (to a ticket the message points at), stop (a ticket, at the person's request) or ignore (with a reason). Items are processed independently. Use only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
@@ -1898,6 +2192,11 @@ const TOOLS = [
               ticket_id: { type: "string", description: "attach and stop: the ticket" },
               reason: { type: "string", description: "ignore and stop: why, at most 500 characters" },
               ...ACCEPT_FIELDS,
+              tickets: {
+                type: "array",
+                description: `accept: when the message holds several separate requests, one entry per request (2–${MAX_SPLIT}); they run in parallel. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them`,
+                items: { type: "object", properties: { ...Object.fromEntries(Object.entries(ACCEPT_FIELDS).filter(([k]) => k !== "acknowledgement")) }, required: ["title", "name", "type", "scope"] },
+              },
             },
             required: ["kind", "trigger_id"],
           },
@@ -1953,12 +2252,12 @@ const TOOLS = [
   },
   {
     name: "superagent_ticket",
-    description: "LLM Superagent: list (what needs the person first), read, report (record a worker turn when its sub-agent returns), retry, recover (a turn lost to a restart), status, note, unsubscribe (a thread), requeue (a message to Eval), dismiss (an unavailable decision). Use only from the llm-superagent skill.",
+    description: "LLM Superagent: list (what needs the person first), read, report (record a worker turn when its sub-agent returns), retry, recover (a turn lost to a restart), status, note, unsubscribe (a thread), requeue (a message to Eval), dismiss (an unavailable decision), merge (queue unmerged branches again). Use only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["list", "read", "report", "retry", "recover", "status", "note", "unsubscribe", "requeue", "dismiss"] },
+        action: { type: "string", enum: ["list", "read", "report", "retry", "recover", "status", "note", "unsubscribe", "requeue", "dismiss", "merge"] },
         ticket: { type: "string" },
         turn: { type: "integer", description: "report: the turn number that returned" },
         attempt: { type: "integer", description: "report: the launch item's attempt number" },
