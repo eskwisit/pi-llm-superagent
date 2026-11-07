@@ -63,6 +63,10 @@ quota, context window, overload), the ticket fails over to its next model, on an
 first since limits are per account, with that model's own thinking level. If
 no model is enabled for sub-agents, workers run on the session model.
 
+Workers get at most `medium` thinking by default. The `excludeThinking` setting lists the
+levels never used (default `high`, `xhigh`, `max`). A higher wanted level goes down to the
+next allowed one. Set it to `[]` to allow all levels.
+
 ## Parallel tickets without collisions
 
 A message with several separate requests ("rename the Save button, and add a dark-mode toggle")
@@ -119,6 +123,7 @@ sentence, and launches the code worker on your strongest coding model. Then:
 | `roleModels` | `{}` | pinned models per task type |
 | `modelProfiles` | `{}` | corrections to inferred traits |
 | `excludeModels`, `modelNotes` | `[]` | models never used; notes for the orchestrator |
+| `excludeThinking` | `["high", "xhigh", "max"]` | thinking levels workers never get |
 | `communication`, `ticketScope`, `delivery` | built-in | team sections every worker reads |
 
 ## Safety
