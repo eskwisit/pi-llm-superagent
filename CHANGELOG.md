@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0
+
+### Features
+
+- **main:** exclude thinking levels, at most medium by default (`76a3095`)
+
+### Documentation
+
+- **skills:** never raise thinking above the suggested level (`23b8a28`)
+- **readme:** explain the excludeThinking setting (`9f42e1b`)
+
+### Tests
+
+- cover excluded thinking levels (`84b63f3`)
+
 ## 0.7.0
 
 ### Features
