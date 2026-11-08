@@ -108,6 +108,10 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
   to 'Save'." Never write a generic "I'll handle it". Post the returned `post` text **once**, as
   your reply to the message.
 - **One request, one ticket.** Never split a sequence of steps into tickets; the worker does that.
+  A broad request ("throughout the project", "everywhere") also stays one ticket: you cannot see
+  its parts without reading code. On its first turn, its worker splits it into parallel tickets
+  when it finds independent parts. The report response then carries `split` and the parts arrive
+  in `launch`: launch them, and say nothing.
 - **Several separate requests in one message: one ticket each, in one accept.** Put them in
   `tickets`, one entry per request, each with `title`, `name`, `type`, `scope` and, if needed,
   `note` and `requirements`. `scope` is one sentence that names the part of the message the
@@ -214,7 +218,7 @@ hit**. Launch whatever comes back in `launch`. Then act on `handoff`:
 | `result` | Write one or two sentences: the outcome the person can use now, and where it is. Clear it with `superagent_reply` `purpose: "result"` and post the returned text. Never forward the report, or shrink it point by point. A merge result carries `merged`: the tickets it landed. Write one message that covers all of them, on the merge ticket. |
 | `question` | `superagent_reply` `purpose: "attention"` with `question` copied **exactly**. Ask the person that one question; use `asktool` when it has clear options. |
 | `blocker` / `failure` | No structured question, so the ticket shows under `needsPerson`. At the end of your turn, tell the person in one sentence: the concrete obstacle and the smallest action that would remove it, or plainly that it cannot be done. Offer `retry`, on another model if useful. |
-| `none` | Say nothing. Progress stays internal. A writer's ready branch that waits for its merge also returns `none`: the person hears the result after the merge. |
+| `none` | Say nothing. Progress stays internal. A worker that split its ticket also returns `none`, with `split` listing the new tickets; launch them. A writer's ready branch that waits for its merge also returns `none`: the person hears the result after the merge. |
 
 `handbacks` and new `candidates` are new triggers to decide. When the response carries
 `answer`, the worker answered a question the person asked. Send that answer with
