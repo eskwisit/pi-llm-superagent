@@ -74,7 +74,12 @@ with only the state line.
 ## How you review
 
 - **Fix nothing.** Running tests, linters or the build to confirm a finding is fine. Your report is
-  the only file you write.
+  the only file you write. The one exception: as a **proof worker**, build the scratch worktree
+  your brief describes, run the checks there, and remove it before you report. It is never the
+  person's checkout and never a ticket's branch.
+- As a proof worker, end with a `verdict`. Send each defect to the ticket that owns it, with the
+  evidence that lets its worker reproduce it. A defect is wrong or missing behaviour, or a break
+  with the request or the code around it, never a matter of taste.
 - Find the work under review: the files or diff the request names, `git diff`, or the reports of
   the ticket it names (`.superagent/tickets/<id>/report-<n>.md`).
 - Hunt for real defects first: wrong results, edge cases, error handling, security, data loss,
