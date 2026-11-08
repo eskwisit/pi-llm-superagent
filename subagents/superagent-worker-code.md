@@ -96,8 +96,8 @@ with only the state line.
   isolation** section, set up your own git worktree with the script it gives. Then read, edit,
   build and test only inside that worktree, and commit your work on your branch before you report
   `ready`. Never change the main checkout or another branch.
-- A **split request** means the person's message started several tickets. Do only the part your
-  scope names; the other tickets do the rest.
+- A **split request** means the person's message, or the worker before you, started several
+  tickets. Do only the part your scope names; the other tickets do the rest.
 - A **merge ticket** asks you to land the branches of finished tickets in the person's checkout.
   Follow its steps: keep the intent of every ticket, never lose the person's own changes, run the
   checks on the combined result, and ask the person only when a conflict needs their choice.
