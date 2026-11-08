@@ -65,7 +65,8 @@ function fakePi(dirs, { settings = {}, models = [] } = {}) {
   const writes = [];
   const tools = new Map();
   const unregistered = [];
-  const store = { ...settings };
+  // checks (acceptance tests and proofs) are off unless a test turns them on: most tests are about other things
+  const store = { proofRounds: 0, ...settings };
   const pi = {
     writes, tools, unregistered, store, modelList: models,
     fs: {
