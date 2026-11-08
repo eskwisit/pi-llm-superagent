@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.10.0
+
+### Features
+
+- **main:** let a worker split a broad ticket into parallel tickets (`d7d20f5`)
+- **skills:** launch the tickets a worker split off, without a message (`a1e1ad1`)
+
+### Fixes
+
+- **main:** run workers at a thinking level excludeThinking allows (`117a9a7`)
+
+### Documentation
+
+- **manifest:** say the worker files carry the allowed thinking level (`147e882`)
+- **skills:** explain that workers run at their definition's thinking level (`7479ccb`)
+- **subagents:** name split tickets started by an earlier worker (`f5c16bd`)
+- **readme:** explain how the worker definitions get the thinking level (`4370b28`)
+- **readme:** explain how workers split broad requests (`53fa549`)
+
+### Tests
+
+- cover the thinking level of installed workers (`8dca884`)
+- cover tickets a worker splits into parallel parts (`e22d8e0`)
+
 ## 0.8.0
 
 ### Features
