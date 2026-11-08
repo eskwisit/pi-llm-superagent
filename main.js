@@ -1059,7 +1059,7 @@ A routing note is routing context only. It adds no requirement.
 - strength: ${t.mandate.strength}
 - accepted under policy version ${t.mandate.policyVersion}, via ${t.mandate.basis.via}
 - scope: ${t.mandate.scope}
-${rules.length ? `\nThis ticket was accepted proactively under these rules. Your authority is limited to the accepted change within them; recheck that it was really requested, that its target is settled, and that no design decision is open, before you change anything:\n\n${rules.map((r) => `- ${r.name} (${r.id}): ${r.instruction}`).join("\n")}\n` : ""}${siblingSection(state, t)}
+${rules.length ? `\nThis ticket was accepted proactively under these rules. Your authority is limited to the accepted change within them; recheck that it was really requested, that its target is settled, and that no design decision is open, before you change anything:\n\n${rules.map((r) => `- ${r.name} (${r.id}): ${r.instruction}`).join("\n")}\n` : ""}${siblingSection(state, t)}${splitSection(t)}
 ## Inputs
 
 ${shown.length ? `Everything that reached this ticket after it started, oldest first. NEW marks what you have not seen in an earlier turn. Decide every NEW message from a person yourself: take it up when it is within this ticket, or hand it back with a reason.\n\n${shown.map((i) => inputLine(state, i, fresh.has(i.id))).join("\n\n")}` : "(none)"}
@@ -1070,7 +1070,26 @@ ${reports.length ? `Read the latest report before you start, and check the works
 ${a.recovery ? `\n## Recovery note\n\n${a.recovery}\n` : ""}${isolationSection(t)}${branchesSection(state, t)}
 ${team}
 
-${reportSection(turn, t.isolation && t.isolation.mode === "worktree" ? ["isolation: <worktree | none (you worked in the main checkout)>", "merge: <yes | no when your branch holds no change to land>"] : [])}`;
+${reportSection(turn, [
+  ...(t.isolation && t.isolation.mode === "worktree" ? ["isolation: <worktree | none (you worked in the main checkout)>", "merge: <yes | no when your branch holds no change to land>"] : []),
+  ...(maySplit(t) ? ["split: <name (type): scope; name (type): scope; … when you split this ticket, or none>"] : []),
+])}`;
+}
+
+/** First turn of a person's request: the worker may hand independent parts to parallel workers instead of doing all of it. */
+function splitSection(t) {
+  if (!maySplit(t)) return "";
+  return `
+## Parallel parts
+
+Before you change anything, judge how far the request reaches. When it covers several independent parts, each big enough for a worker of its own, that other workers can do at the same time without changing the same files (for example the API, the web app and the docs of a change made throughout a project), split the ticket instead of doing all of it yourself:
+
+- Change nothing. Remove your worktree and branch if you made them.
+- Report \`state: dropped\`, a summary that names the parts, and one \`split:\` line with 2 to ${MAX_SPLIT} entries, separated by \`;\`: \`name (type): scope\`. \`name\` is a short slug, \`type\` one of ${ACCEPT_TYPES.join(", ")}, and \`scope\` one sentence that names the part (files, area) the new ticket owns. The scopes do not overlap and together cover the whole request.
+- A part that needs the results of others (a comparison, an integration step): \`name (type) after name1, name2: scope\`. It starts once they ended. At least one part must start now.
+
+Each part becomes a ticket with its own worker, in parallel, on the same request. Split only on this first turn. Do not split a sequence of steps where each needs the one before, or work you can finish well alone: then do the whole ticket yourself.
+`;
 }
 
 /** The other tickets one message started: each worker keeps to its own part. */
@@ -1078,7 +1097,8 @@ function siblingSection(state, t) {
   const sibs = (t.siblings || []).map((id) => state.tickets[id]).filter(Boolean);
   if (!sibs.length) return "";
   const after = (s) => (s.after && s.after.length ? ` (starts after ${s.after.join(", ")})` : "");
-  return `\n## Split request\n\nThe original request asks for several separate things, so it started several tickets that run in parallel; a ticket that needs the results of others starts after they end. Your part is the scope of your Mandate. These tickets own the other parts: leave them alone, and do not report their work as missing.\n\n${sibs.map((s) => `- ${s.id} (${s.type}): ${s.mandate.scope}${after(s)}`).join("\n")}\n\n${afterSection(state, t)}`;
+  const why = t.parent ? `The worker of ticket ${t.parent} found independent parts in the original request and split it into several tickets` : "The original request asks for several separate things, so it started several tickets";
+  return `\n## Split request\n\n${why} that run in parallel; a ticket that needs the results of others starts after they end. Your part is the scope of your Mandate. These tickets own the other parts: leave them alone, and do not report their work as missing.\n\n${sibs.map((s) => `- ${s.id} (${s.type}): ${s.mandate.scope}${after(s)}`).join("\n")}\n\n${afterSection(state, t)}`;
 }
 
 /** The tickets whose results this ticket needs (`after`): they ended before it started, so their reports are final. */
@@ -1246,6 +1266,11 @@ function parseReport(text) {
     handback: pairs("handback"),
     unrelated: pairs("unrelated"),
     follow: pairs("follow"),
+    // first turn only: the parts a worker split its ticket into, `name (type) [after a, b]: scope; …`
+    split: (value("split") || "").split(";").map((x) => x.trim()).filter(Boolean).map((x) => {
+      const m = /^([a-z0-9][\w.-]*)\s*\(\s*([a-z]+)\s*\)(?:\s+after\s+([^:]+?))?\s*:\s*(.+)$/i.exec(x);
+      return m ? { name: m[1], type: m[2].toLowerCase(), after: m[3] ? m[3].split(/[,\s]+/).filter(Boolean) : [], scope: m[4].trim().slice(0, 300) } : { invalid: x.slice(0, 120) };
+    }),
     // writers in a worktree: where they worked, and whether their branch holds a change to land (null: not said)
     isolation: str(head.isolation).toLowerCase().trim() || null,
     merge: "merge" in head ? !/^(no|none|false|nothing)\b/i.test(str(head.merge).trim()) : null,
@@ -1567,6 +1592,69 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
   const post = ack ? { post: ack } : {};
   if (split) return { tickets: drafts.map(view), decision: decision.id, ...post };
   return { ...view(drafts[0]), decision: decision.id, ...post };
+}
+
+/** A ticket may split itself on its first turn: a person's explicit request, not yet a part of a split, not a merge. */
+const maySplit = (t) => t.type !== "merge" && t.mandate.strength === "explicit" && !t.siblings && !t.parent && ticketTurns(t).length === 1;
+
+/**
+ * The worker found that its ticket holds independent parts: one new ticket per part, in parallel (an entry with
+ * `after` starts once those ended), under the same Mandate and message. Returns the new tickets' ids, or null with
+ * a warning when the entries are not usable; the report is then handled as usual.
+ */
+function splitTicket(state, cfg, catalog, t, entries, out) {
+  const bad = (why) => {
+    out.warnings.push(`${t.id}: split ignored (${why})`);
+    return null;
+  };
+  if (!maySplit(t)) return bad("only the first turn of a ticket a person asked for may split, and never a part of a split");
+  if (entries.some((e) => e.invalid)) return bad(`cannot read "${entries.find((e) => e.invalid).invalid}"; write name (type): scope`);
+  if (entries.length < 2 || entries.length > MAX_SPLIT) return bad(`it needs 2 to ${MAX_SPLIT} parts`);
+  const wrong = entries.find((e) => !ACCEPT_TYPES.includes(e.type));
+  if (wrong) return bad(`${wrong.name}: type must be one of ${ACCEPT_TYPES.join(", ")}`);
+  const ctx = routingContext(catalog.entries, cfg);
+  for (const x of Object.values(state.tickets)) ctx.chosen.set(x.id, x.model);
+  const reserved = new Set();
+  const drafts = entries.map((e) => {
+    const id = uniqueTicketId(state, slug(`${t.id}-${e.name}`), reserved);
+    reserved.add(id);
+    const route = routeTask({ id, type: e.type, req: t.req }, ctx);
+    ctx.chosen.set(id, route.model);
+    out.warnings.push(...route.warnings);
+    return { id, route, ...e };
+  });
+  try {
+    resolveAfter(entries, drafts, true);
+  } catch (err) {
+    return bad(err.message);
+  }
+  if (!drafts.some((d) => !d.after.length)) return bad("no part can start now");
+  const ids = drafts.map((d) => d.id);
+  const threads = Object.values(state.threads).filter((th) => th.subscriptions.includes(t.id) && !(th.context || []).includes(t.id));
+  for (const d of drafts) {
+    const { id, type, route } = d;
+    const c = {
+      id, title: `${t.title} (${d.name})`.slice(0, 200), type, decisionId: t.decisionId, mandate: { ...t.mandate, scope: d.scope },
+      channels: [...t.channels], attention: undefined, assignments: [], inputs: [], undelivered: [], answers: [], createdAt: now(), updatedAt: now(),
+      origin: { ...t.origin }, note: t.note, req: t.req, model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+      thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, t.req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
+      siblings: ids.filter((x) => x !== id), parent: t.id, ...(d.after.length ? { after: d.after } : {}),
+    };
+    state.tickets[id] = c;
+    for (const th of threads) th.subscriptions.push(id);
+    for (const trId of t.origin.triggerIds) {
+      const tr = state.triggers[trId];
+      if (!tr) continue;
+      state.dispositions[trId].fanout.push(id);
+      if (state.dispositions[trId].acked.includes(t.id)) state.dispositions[trId].acked.push(id);
+      addInput(state, c, { kind: "trigger", triggerId: trId, human: tr.human, at: tr.at });
+    }
+    wake(state, c);
+  }
+  // the parts own the thread now: a follow-up goes to them, never back to the ticket that split
+  for (const th of threads) th.subscriptions = th.subscriptions.filter((x) => x !== t.id);
+  t.splitInto = ids;
+  return ids;
 }
 
 function turnOf(t, n) {
@@ -2056,6 +2144,14 @@ async function ticketReport(state, cfg, a, out) {
     }
   }
   learnIsolation(state, t, rep);
+  if (rep.split.length) {
+    const ids = rep.state === "dropped" ? splitTicket(state, cfg, await loadCatalog(), t, rep.split, out)
+      : (out.warnings.push(`${t.id}: split ignored (a ticket that splits reports dropped and changes nothing)`), null);
+    if (ids) {
+      endTicket(state, cfg, t, { by: "executor", outcome: "split" }, out);
+      return { ticket: t.id, stage: stageLabel(t), split: ids, note: `split by its worker into ${ids.join(", ")}: launch them; the person hears their results`, handoff: { kind: "none" } };
+    }
+  }
   const human = hasHumanUndelivered(t);
   // the person wrote while this turn ran and the worker could not read it: it reads it before the ticket ends
   const recheck = human && (rep.state === "ready" || rep.state === "dropped");
@@ -2100,6 +2196,8 @@ async function superTicket(args) {
       undelivered: t.undelivered.length, latestReport: latest,
       ...(t.isolation ? { isolation: t.isolation } : {}), ...(t.merge ? { merge: t.merge } : {}), ...(t.merges ? { merges: t.merges } : {}),
       ...(t.siblings ? { siblings: t.siblings } : {}),
+      ...(t.parent ? { parent: t.parent } : {}),
+      ...(t.splitInto ? { splitInto: t.splitInto } : {}),
       ...(t.after ? { after: t.after, waitsFor: afterOpen(state, t) } : {}),
     };
   }
