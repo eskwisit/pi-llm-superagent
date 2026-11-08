@@ -54,6 +54,8 @@ const TASK_TYPES = {
   docs: { agent: "superagent-worker-docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose", writes: true },
   // internal: started by the plugin, never accepted from a message
   merge: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 4, context: 2 }, thinking: "medium", about: "land finished ticket branches in the person's checkout and resolve their conflicts", writes: true, internal: true },
+  spec: { agent: "superagent-worker-code", weights: { coding: 3, reasoning: 2, speed: 2, cost: 3 }, thinking: "low", about: "write the acceptance checklist and tests of a change from its request, apart from its implementation", writes: true, internal: true },
+  proof: { agent: "superagent-worker-review", weights: { reasoning: 3, coding: 3, speed: 1, cost: 3 }, thinking: "medium", about: "check that finished work passes its acceptance tests and fits the request and the codebase, and list its defects; read-only", internal: true },
 };
 const AGENTS = [...new Set(Object.values(TASK_TYPES).map((t) => t.agent))];
 /** Task types a decision may accept; `merge` is the plugin's own. */
@@ -69,18 +71,28 @@ const STATE_FILE = `${ROOT_DIR}/state.json`;
 const RULE_ID_RE = /^[a-zA-Z0-9_-]{1,80}$/;
 const REPORT_STATES = ["progress", "waiting", "ready", "blocked", "failed", "dropped"];
 const LIMIT = /\b429\b|rate.?limit|quota|usage.?limit|limit (reached|exceeded|hit)|too many requests|context.?(length|window)|maximum context|token limit|overload|capacity|insufficient.?(credit|balance|funds)/i;
+/** Limits of a provider account (not of one request, such as a context window): they hold for every ticket. */
+const ACCOUNT_LIMIT = /\b429\b|rate.?limit|quota|usage.?limit|limit (reached|exceeded|hit)|too many requests|overload|capacity|insufficient.?(credit|balance|funds)/i;
 const TRANSIENT = /\b(408|5\d\d)\b|timed? ?out|timeout|ECONN|ETIMEDOUT|socket|network|temporar|unavailable|connection (reset|refused)/i;
 const TURN_RETRIES = 3; // attempts of one turn after passing failures
 const GO_ON_LIMIT = 2; // turns that may end in `progress` in a row before the ticket idles
 const STALE_TURN_MS = 90 * 60 * 1000; // a turn running longer was cut off (workers stop at 60 min)
 const MAX_FALLBACKS = 3;
+const LIMIT_COOLDOWN_MS = 15 * 60 * 1000; // a provider account that hit a limit gets no new launch for this long
+/** The lines the host adds to a sub-agent result when a model failed and it moved on: `Model <key> failed (<CODE>): <message>`. */
+const MODEL_FAILED = /Model (\S+) failed \(([A-Z_]+)\):\s*([^\n]*)/g;
 const NOTE_WORDS = 30; // routing note
 const IM_WORDS = 100; // any message to the person
 const NOTE_FACT_WORDS = 100; // a note about other work
-const DEFAULT_WORKERS = 3;
+const DEFAULT_WORKERS = 6;
 const MAX_WORKERS = 8;
 const DEFAULT_EVAL_TIMEOUT = 120;
 const MAX_SPLIT = 8; // tickets one message may start
+const DEFAULT_PROOF_ROUNDS = 3; // proof runs of a check group before the person decides; 0 turns checks off
+const MAX_PROOF_ROUNDS = 6;
+/** How a writer ticket is checked: full (acceptance tests written in parallel, then a proof), proof (a proof only) or none. */
+const CHECK_LEVELS = ["full", "proof", "none"];
+const DEFAULT_CHECK = { code: "full", debug: "full", test: "proof", docs: "none" };
 const ISOLATION = ["auto", "worktree", "serial"];
 const WORKTREE_DIR = ".superagent/worktrees";
 
@@ -486,6 +498,7 @@ async function settings() {
     },
     evalTimeoutSeconds: Number.isInteger(t) && t >= 30 && t <= 3600 ? t : DEFAULT_EVAL_TIMEOUT,
     maxWorkers: Number.isInteger(n) && n >= 1 && n <= MAX_WORKERS ? n : DEFAULT_WORKERS,
+    proofRounds: Number.isInteger(s.proofRounds) && s.proofRounds >= 0 && s.proofRounds <= MAX_PROOF_ROUNDS ? s.proofRounds : DEFAULT_PROOF_ROUNDS,
     profiles: isObj(s.modelProfiles) ? s.modelProfiles : {},
     pins: isObj(s.roleModels) ? s.roleModels : {},
     exclude: strList(s.excludeModels),
@@ -606,6 +619,7 @@ function ticketStage(t) {
   const report = a && a.report && a.report.state;
   const live = a && activeTurn(a);
   if (t.merge && t.merge.state !== "unmerged" && !live) return { stage: "working", action: "merge" };
+  if (t.hold && !live) return { stage: "working", action: "proof" };
   if (report === "ready" && !live) return { stage: "person", action: "review" };
   if ((report === "blocked" || report === "failed") && waitsForPerson(t)) return { stage: "person", action: report };
   if (!a || a.state === "pending") return { stage: "working", action: "queued" };
@@ -825,6 +839,11 @@ function wake(state, t, { priority = false, kind = "work" } = {}) {
   if (!liveTicket(t)) return;
   if (kind === "work" && !t.undelivered.length && t.assignments.length) return;
   if (kind === "work" && waitsForPerson(t)) return;
+  if (t.hold) {
+    // ready work that waits for its proof wakes for a person, or for a fix the proof asks for
+    if (kind === "work" && !hasHumanUndelivered(t)) return;
+    delete t.hold;
+  }
   if (t.merge && t.merge.state !== "unmerged") {
     // a branch waiting for its merge wakes only for a person; a queued branch leaves the queue, a merging one waits for the merge
     if (kind === "work" && !hasHumanUndelivered(t)) return;
@@ -875,60 +894,151 @@ function endTicket(state, cfg, t, { by, outcome, reason }, out) {
 }
 
 // ---------- isolation: parallel writers in git worktrees, merged by a merge ticket ----------
-/** Worktrees may run side by side once a worker found git, or when the person says the workspace is a git repository. */
-const parallelWriters = (cfg, state) => cfg.isolation === "worktree" || (cfg.isolation === "auto" && state.vcs === "git");
+/** The git repository folder of a ticket, relative to the workspace root: "" is the workspace root itself. */
+const repoOf = (t) => (t && typeof t.repo === "string" ? t.repo : "");
+
+/** Check the optional `repo` of an accept: a folder relative to the workspace root, inside it. */
+function normalizeRepo(raw, where) {
+  if (raw === undefined || raw === null) return "";
+  const v = str(raw).trim().replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
+  if (!v || v === ".") return "";
+  if (v.startsWith("/") || /^[a-z]:/i.test(v) || v.split("/").some((p) => p === ".." || p === "." || !p)) {
+    fail(`${where}repo must be a folder relative to the workspace root, inside it (for example neural-radar), not ${JSON.stringify(raw)}`);
+  }
+  return v;
+}
+
+/** What is known about git in a ticket's repository folder: "git", "none" or undefined (not known yet). */
+function vcsOf(state, repo) {
+  if (!repo) return state.vcs;
+  return (state.repos || {})[repo];
+}
+function setVcs(state, repo, value) {
+  if (!repo) state.vcs = value;
+  else (state.repos ||= {})[repo] = value;
+}
+
+/**
+ * Look for git in the folder itself, so writers need not wait for a worker to confirm it: a `.git` folder with a
+ * HEAD file, or a `.git` file that points at the git dir (a worktree or submodule). A found repository wins over
+ * an earlier "none". Nothing found leaves the state as it is: the folder may sit inside a repository above it.
+ */
+async function probeGit(state, repo) {
+  if (vcsOf(state, repo) === "git") return;
+  const at = (p) => (repo ? `${repo}/${p}` : p);
+  let found = false;
+  try {
+    found = /^(ref:|[0-9a-f]{40})/.test(str(await pi.fs.readText(at(".git/HEAD"))).trim());
+  } catch {}
+  if (!found) {
+    try {
+      found = /^gitdir:/.test(str(await pi.fs.readText(at(".git"))).trim());
+    } catch {}
+  }
+  if (found) setVcs(state, repo, "git");
+}
+
+/** Worktrees may run side by side once git is found in the ticket's repository, or when the person says so. */
+const parallelWriters = (cfg, state, repo = "") => cfg.isolation === "worktree" || (cfg.isolation === "auto" && vcsOf(state, repo) === "git");
 
 /** Fix where a writer ticket works, at its first launch: its own worktree and branch, or the shared checkout. */
 function ensureIsolation(state, cfg, t) {
   if (t.isolation || !writes(t) || t.type === "merge") return;
-  t.isolation = cfg.isolation === "serial" || state.vcs === "none"
-    ? { mode: "shared" }
-    : { mode: "worktree", branch: `superagent/${t.id}`, path: `${WORKTREE_DIR}/${t.id}`, base: `refs/superagent/base/${t.id}` };
+  const repo = repoOf(t);
+  const wt = `${WORKTREE_DIR}/${t.id}`;
+  t.isolation = cfg.isolation === "serial" || vcsOf(state, repo) === "none"
+    ? { mode: "shared", ...(repo ? { repo } : {}) }
+    : { mode: "worktree", branch: `superagent/${t.id}`, path: repo ? `${repo}/${wt}` : wt, base: `refs/superagent/base/${t.id}`, ...(repo ? { repo, wt } : {}) };
 }
 
 /**
- * A turn that may not overlap another such turn: a merge or a writer in the shared checkout, which both change the
- * person's checkout, and a worktree writer while nobody knows yet whether the workspace is a git repository.
+ * A turn that may not overlap another such turn in the same folder: a merge or a writer in the shared checkout,
+ * which both change the person's checkout, and a worktree writer while nobody knows yet whether its folder is a
+ * git repository. Writers in different project folders do not collide.
  */
-const exclusive = (cfg, state, t) => t.type === "merge" || (writes(t) && (!t.isolation || t.isolation.mode !== "worktree" || !parallelWriters(cfg, state)));
+const exclusive = (cfg, state, t) => t.type === "merge" || (writes(t) && (!t.isolation || t.isolation.mode !== "worktree" || !parallelWriters(cfg, state, repoOf(t))));
+
+/** Two folders overlap when they are the same or one holds the other; the workspace root holds every folder. */
+const overlaps = (a, b) => a === b || !a || !b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+
+// ---------- model limits: shared by every ticket ----------
+/** Limits apply per provider account: the part of a model key before the first `/`. */
+const accountOf = (model) => str(model).split("/")[0];
+
+/** Remember that an account hit a limit, so no ticket starts on it again until the cooldown ends. */
+function coolAccount(state, model, reason) {
+  if (!model || model === "inherit") return;
+  (state.cooldown ||= {})[accountOf(model)] = { model, until: new Date(Date.now() + LIMIT_COOLDOWN_MS).toISOString(), reason: str(reason).slice(0, 200), at: now() };
+}
+
+/** Whether a model's account is in its cooldown; an ended cooldown is removed. */
+function cooling(state, model) {
+  const c = (state.cooldown || {})[accountOf(model)];
+  if (!c) return false;
+  if (Date.parse(c.until) > Date.now()) return true;
+  delete state.cooldown[accountOf(model)];
+  return false;
+}
+
+/** The ticket's next model that is not cooling: another account first, then any. */
+function healthyModel(state, t, from) {
+  const rest = (t.chain || []).filter((m) => m && m !== "inherit" && m !== from && !cooling(state, m));
+  return rest.find((m) => accountOf(m) !== accountOf(from)) || rest[0] || null;
+}
+
+/** Cool every account the host reported as limited in a sub-agent result (`Model … failed (…)` lines). */
+function learnLimits(state, text) {
+  const hit = [];
+  for (const m of str(text).matchAll(MODEL_FAILED)) {
+    if (m[2] === "PROVIDER_RATE_LIMITED" || ACCOUNT_LIMIT.test(`${m[2]} ${m[3]}`)) {
+      coolAccount(state, m[1], `${m[2]}: ${m[3]}`);
+      hit.push(m[1]);
+    }
+  }
+  return hit;
+}
 
 /**
- * Start one merge ticket for the branches that wait, unless a merge is open. A branch waits for its sibling tickets
- * (the other parts of the same message) while they still work, so a split request lands together.
+ * Start one merge ticket per repository for the branches that wait, unless a merge is open there. A branch waits
+ * for its sibling tickets in the same repository (the other parts of the same message) while they still work, so
+ * a split request lands together.
  */
 async function scheduleMerges(state, cfg, out) {
   if (cfg.paused) return;
   const tickets = Object.values(state.tickets);
-  if (tickets.some((t) => t.type === "merge" && liveTicket(t))) return;
   const queued = tickets.filter((t) => liveTicket(t) && t.merge && t.merge.state === "queued");
-  const ready = queued.filter((t) => !(t.siblings || []).some((id) => {
-    const s = state.tickets[id];
-    // a sibling that waits for `after` tickets cannot get ready before they end: waiting for it would never end
-    return s && liveTicket(s) && writes(s) && !s.merge && !afterOpen(state, s).length && ticketStage(s).stage === "working";
-  }));
-  if (!ready.length) return;
-  const catalog = await loadCatalog();
-  const id = uniqueTicketId(state, "merge");
-  const ctx = routingContext(catalog.entries, cfg);
-  const { req } = normalizeRequirements({}, "merge");
-  const route = routeTask({ id, type: "merge", req }, ctx);
-  out.warnings.push(...route.warnings);
-  const ids = ready.map((t) => t.id);
-  const first = ready[0];
-  // its own thread: the person answers a merge question there
-  const key = `${SOURCE}:${id}`;
-  state.threads[key] = { key, createdAt: now(), subscriptions: [id], context: [], correlated: [], pending: [], evaluating: null, expired: 0 };
-  const t = {
-    id, title: `Merge ${ids.join(", ")}`, type: "merge", decisionId: null,
-    mandate: { strength: "explicit", policyVersion: policyVersion(cfg), basis: { via: "merge", tickets: ids }, actor: first.mandate.actor, scope: `land the ready branches of ${ids.join(", ")} in the person's checkout` },
-    channels: [key], attention: undefined, assignments: [], inputs: [], undelivered: [], answers: [], createdAt: now(), updatedAt: now(),
-    origin: { triggerId: first.origin.triggerId, triggerIds: [] }, note: "", req, merges: ids,
-    model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
-    thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor("merge", req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
-  };
-  state.tickets[id] = t;
-  for (const s of ready) s.merge = { state: "merging", by: id, at: now() };
-  wake(state, t);
+  const repos = [...new Set(queued.map(repoOf))];
+  for (const repo of repos) {
+    if (tickets.some((t) => t.type === "merge" && liveTicket(t) && repoOf(t) === repo)) continue;
+    const ready = queued.filter((t) => repoOf(t) === repo && !(t.siblings || []).some((id) => {
+      const s = state.tickets[id];
+      // a sibling that waits for `after` tickets cannot get ready before they end: waiting for it would never end
+      return s && repoOf(s) === repo && liveTicket(s) && writes(s) && !s.merge && !afterOpen(state, s).length && ticketStage(s).stage === "working";
+    }));
+    if (!ready.length) continue;
+    const catalog = await loadCatalog();
+    const id = uniqueTicketId(state, "merge");
+    const ctx = routingContext(catalog.entries, cfg);
+    const { req } = normalizeRequirements({}, "merge");
+    const route = routeTask({ id, type: "merge", req }, ctx);
+    out.warnings.push(...route.warnings);
+    const ids = ready.map((t) => t.id);
+    const first = ready[0];
+    // its own thread: the person answers a merge question there
+    const key = `${SOURCE}:${id}`;
+    state.threads[key] = { key, createdAt: now(), subscriptions: [id], context: [], correlated: [], pending: [], evaluating: null, expired: 0 };
+    const t = {
+      id, title: `Merge ${ids.join(", ")}`, type: "merge", decisionId: null,
+      mandate: { strength: "explicit", policyVersion: policyVersion(cfg), basis: { via: "merge", tickets: ids }, actor: first.mandate.actor, scope: `land the ready branches of ${ids.join(", ")} in the person's checkout${repo ? ` of ${repo}` : ""}` },
+      channels: [key], attention: undefined, assignments: [], inputs: [], undelivered: [], answers: [], createdAt: now(), updatedAt: now(),
+      origin: { triggerId: first.origin.triggerId, triggerIds: [] }, note: "", req, merges: ids, ...(repo ? { repo } : {}),
+      model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+      thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor("merge", req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
+    };
+    state.tickets[id] = t;
+    for (const s of ready) s.merge = { state: "merging", by: id, at: now() };
+    wake(state, t);
+  }
 }
 
 /** A merge reported ready or dropped: its branches are landed, so their tickets complete (or first read what the person wrote meanwhile). */
@@ -949,13 +1059,197 @@ function finishMerge(state, cfg, t, rep, out) {
   return merged;
 }
 
+// ---------- quality checks: acceptance tests written in parallel, a proof, and fixes until it passes ----------
+/**
+ * A check group: the writer tickets of one request that are proved together, so the proof also sees whether
+ * the parts fit. `spec` writes the acceptance checklist and tests from the request while they work; once all
+ * of them are ready, `proof` runs the tests and checks the fit, and sends defects back until the work passes
+ * or `proofRounds` runs are used up. Only then do the branches go to the merge.
+ */
+const checkOf = (state, t) => (t && t.check && state.checks ? state.checks[t.check] : null);
+
+/** The check level of a new ticket: the one asked for, else the type's default; none when checks are off. */
+function checkLevel(cfg, type, raw, where) {
+  if (!writes({ type }) || TASK_TYPES[type].internal || cfg.proofRounds === 0) return "none";
+  if (raw === undefined || raw === null || raw === "") return DEFAULT_CHECK[type] || "none";
+  if (!CHECK_LEVELS.includes(raw)) fail(`${where}check must be one of ${CHECK_LEVELS.join(", ")}`);
+  return raw;
+}
+
+/** A ticket the plugin starts for a check group: its own thread, the request and mandate of the group's first ticket. */
+function internalTicket(state, ctx, { id, type, title, scope, req, from, repo, out }) {
+  const route = routeTask({ id, type, req }, ctx);
+  ctx.chosen.set(id, route.model);
+  out.warnings.push(...route.warnings);
+  const key = `${SOURCE}:${id}`;
+  state.threads[key] = { key, createdAt: now(), subscriptions: [id], context: [], correlated: [], pending: [], evaluating: null, expired: 0 };
+  // the person's later messages on the request reach it as context: a changed requirement changes the checks too
+  for (const k of from.channels) {
+    const th = state.threads[k];
+    if (th && !th.subscriptions.includes(id)) {
+      th.subscriptions.push(id);
+      (th.context ||= []).push(id);
+    }
+  }
+  const t = {
+    id, title: title.slice(0, 200), type, decisionId: from.decisionId, mandate: { ...from.mandate, scope },
+    channels: [key], attention: undefined, assignments: [], inputs: [], undelivered: [], answers: [], createdAt: now(), updatedAt: now(),
+    origin: { triggerId: from.origin.triggerId, triggerIds: [] }, note: from.note || "", req, ...(repo ? { repo } : {}),
+    model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+    thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
+  };
+  state.tickets[id] = t;
+  return t;
+}
+
+/** Start a check group for writer tickets; `full` also starts the test worker now, in parallel with them. */
+function createCheckGroup(state, cfg, ctx, members, level, out) {
+  if (!members.length || level === "none") return null;
+  state.checks ||= {};
+  const id = uniqueTicketId(state, `check-${members[0].id}`, new Set(Object.keys(state.checks)));
+  const g = { id, members: members.map((m) => m.id), level, spec: null, proof: null, runs: 0, state: "building", createdAt: now() };
+  state.checks[id] = g;
+  for (const m of members) m.check = id;
+  if (level === "full") {
+    const sid = uniqueTicketId(state, `${members[0].id}-spec`);
+    const { req } = normalizeRequirements({ budget: "low" }, "spec");
+    const s = internalTicket(state, ctx, {
+      id: sid, type: "spec", title: `Acceptance tests: ${members.map((m) => m.title).join("; ")}`,
+      scope: `write the acceptance checklist and tests for: ${members.map((m) => m.mandate.scope).join("; ")}`,
+      req, from: members[0], repo: repoOf(members[0]), out,
+    });
+    s.check = id;
+    g.spec = sid;
+    wake(state, s);
+  }
+  return g;
+}
+
+/** Hand ready work on: to the merge queue when it sits on a branch, else it is done. */
+function releaseChecked(state, cfg, t, out) {
+  delete t.hold;
+  if (!liveTicket(t)) return false;
+  if (t.isolation && t.isolation.mode === "worktree") {
+    t.merge = { state: "queued", at: now() };
+    return true;
+  }
+  endTicket(state, cfg, t, { by: "executor", outcome: "completed" }, out);
+  return false;
+}
+
+/** Run the proof of every group whose work is all ready; close groups whose tickets all ended. */
+async function scheduleProofs(state, cfg, out) {
+  if (cfg.paused || !state.checks) return;
+  let catalog = null;
+  for (const g of Object.values(state.checks)) {
+    if (g.state === "passed" || g.state === "closed" || g.state === "escalated") continue;
+    const members = g.members.map((id) => state.tickets[id]).filter(Boolean);
+    const live = members.filter(liveTicket);
+    const spec = g.spec ? state.tickets[g.spec] : null;
+    const proof = g.proof ? state.tickets[g.proof] : null;
+    if (!live.length) {
+      // nothing left to prove: its tickets were stopped, dropped or had no change
+      for (const x of [spec, proof]) if (x && liveTicket(x)) endTicket(state, cfg, x, { by: "executor", outcome: "dropped", reason: "nothing left to check" }, out);
+      g.state = "closed";
+      continue;
+    }
+    if (g.state === "proving") {
+      // a stopped or ended proof leaves the work unproved: the person decides
+      if (!proof || !liveTicket(proof)) escalate(state, g, out);
+      continue;
+    }
+    const held = (x) => x.hold && x.hold.state === "proof";
+    if (!live.every(held)) continue;
+    if (spec && liveTicket(spec) && !held(spec)) continue;
+    g.runs++;
+    g.state = "proving";
+    for (const x of [...live, spec]) if (x && x.hold) x.hold.state = "proving";
+    if (proof && liveTicket(proof)) {
+      addInput(state, proof, { kind: "proof-round", text: `Round ${g.runs}: the workers fixed what the earlier round found, or ruled on it. Check everything again: the branches below hold their latest work.` });
+      wake(state, proof);
+      continue;
+    }
+    catalog ||= await loadCatalog();
+    const ctx = routingContext(catalog.entries, cfg);
+    for (const x of Object.values(state.tickets)) ctx.chosen.set(x.id, x.model);
+    // another model family than the workers it checks, so it does not share their blind spots
+    const { req } = normalizeRequirements({ differentFrom: live.map((m) => m.id) }, "proof");
+    const p = internalTicket(state, ctx, {
+      id: uniqueTicketId(state, `${live[0].id}-proof`), type: "proof", title: `Proof: ${live.map((m) => m.title).join("; ")}`,
+      scope: `check that the work of ${live.map((m) => m.id).join(", ")} passes its acceptance tests and fits the request and the codebase`,
+      req, from: live[0], repo: repoOf(live[0]), out,
+    });
+    p.check = g.id;
+    g.proof = p.id;
+    wake(state, p);
+  }
+}
+
+/** Proof runs used up, or the proof stopped: branches stay unmerged and the work waits for the person. */
+function escalate(state, g, out) {
+  g.state = "escalated";
+  for (const id of [...g.members, g.spec].filter(Boolean)) {
+    const t = state.tickets[id];
+    if (!t || !t.hold) continue;
+    delete t.hold;
+    if (liveTicket(t) && t.isolation && t.isolation.mode === "worktree") t.merge = { state: "unmerged", at: now() };
+  }
+  out.warnings.push(`${g.id}: the work was not proved; its branches stay unmerged until the person decides (superagent_ticket merge, or retry)`);
+}
+
+/** A proof reported ready: pass sends the work to the merge, fail sends each defect back to its worker. */
+function finishProof(state, cfg, p, rep, out) {
+  const g = checkOf(state, p);
+  if (!g) {
+    endTicket(state, cfg, p, { by: "executor", outcome: "completed" }, out);
+    return { handoff: { kind: "none" } };
+  }
+  const members = g.members.map((id) => state.tickets[id]).filter((t) => t && liveTicket(t));
+  const spec = g.spec ? state.tickets[g.spec] : null;
+  const held = [...members, spec].filter((t) => t && liveTicket(t) && t.hold);
+  const pass = rep.verdict === "pass" || (rep.verdict !== "fail" && !rep.bugs.length && !rep.spec_bugs);
+  if (pass) {
+    g.state = "passed";
+    let merging = false;
+    for (const t of held) merging = releaseChecked(state, cfg, t, out) || merging;
+    endTicket(state, cfg, p, { by: "executor", outcome: "completed" }, out);
+    return merging
+      ? { handoff: { kind: "none" }, note: `proof passed (round ${g.runs}): the branches are queued for the merge worker; the result goes to the person once they are landed` }
+      : { handoff: { kind: "result", summary: rep.summary, purpose: "result" }, note: `proof passed (round ${g.runs})` };
+  }
+  if (g.runs >= cfg.proofRounds) {
+    escalate(state, g, out);
+    endTicket(state, cfg, p, { by: "executor", outcome: "failed", reason: `still failing after ${g.runs} proof rounds` }, out);
+    return { handoff: { kind: "blocker", summary: `The work still fails its proof after ${g.runs} rounds: ${rep.summary}`, note: `its branches stay unmerged. Tell the person the main defect (report ${(ticketTurns(p).slice(-1)[0] || {}).report}), and offer to merge anyway (superagent_ticket merge) or to retry` }, note: "proof rounds used up" };
+  }
+  g.state = "fixing";
+  const report = (ticketTurns(p).slice(-1)[0] || {}).report;
+  const byId = new Map(members.map((m) => [m.id, m]));
+  const targets = new Map();
+  for (const b of rep.bugs) {
+    const t = byId.get(b.id) || (spec && (b.id === spec.id || b.id === "spec") ? spec : null);
+    if (t) targets.set(t, [...(targets.get(t) || []), b.reason]);
+    else out.warnings.push(`${p.id}: bug for unknown ticket ${b.id}`);
+  }
+  if (rep.spec_bugs && spec && liveTicket(spec)) targets.set(spec, [...(targets.get(spec) || []), rep.spec_bugs]);
+  // a failing verdict that names nobody goes to every worker of the group
+  if (!targets.size) for (const m of members) targets.set(m, [rep.summary || "the proof failed"]);
+  for (const [t, bugs] of targets) {
+    addInput(state, t, { kind: "proof", text: `The proof worker (round ${g.runs} of at most ${cfg.proofRounds}) found defects to fix in this ticket:\n${bugs.map((b) => `  - ${b}`).join("\n")}\n  Full evidence: ${report}` });
+    wake(state, t, { kind: "fix" });
+  }
+  // the others keep waiting for the next round
+  for (const t of held) if (t.hold) t.hold.state = "proof";
+  return { handoff: { kind: "none" }, note: `proof round ${g.runs} failed: defects went back to ${[...targets.keys()].map((t) => t.id).join(", ")}` };
+}
+
 /** Launch pending turns into free slots, people's messages first; one extra slot is kept for a person or a status request. */
 async function promote(state, cfg, out) {
   if (cfg.paused) return;
   const pending = [];
   let running = 0;
   let extraUsed = false;
-  let exclusiveRunning = false;
+  const held = []; // the folders of exclusive turns that run
   for (const t of Object.values(state.tickets)) {
     if (!liveTicket(t)) continue;
     for (const a of t.assignments) {
@@ -963,18 +1257,22 @@ async function promote(state, cfg, out) {
         if (turn.state === "running") {
           running++;
           if (turn.extra) extraUsed = true;
-          if (exclusive(cfg, state, t)) exclusiveRunning = true;
+          if (exclusive(cfg, state, t)) held.push(repoOf(t));
         } else if (turn.state === "pending" && a.state !== "ended") pending.push([t, a, turn]);
       }
     }
   }
   pending.sort((x, y) => Number(y[2].priority) - Number(x[2].priority) || x[2].seq - y[2].seq);
+  // look for git where writers wait, so they need not run one at a time until a worker confirms it
+  if (cfg.isolation === "auto") {
+    for (const repo of new Set(pending.filter(([t]) => writes(t)).map(([t]) => repoOf(t)))) await probeGit(state, repo);
+  }
   for (const [t, a, turn] of pending) {
     if (t.merge && t.merge.state === "merging") continue; // its branch is being merged: the turn waits
     if (afterOpen(state, t).length) continue; // it needs the results of tickets that have not ended yet
     ensureIsolation(state, cfg, t);
     const excl = exclusive(cfg, state, t);
-    if (excl && exclusiveRunning) continue;
+    if (excl && held.some((r) => overlaps(r, repoOf(t)))) continue;
     let extra = false;
     if (running - (extraUsed ? 1 : 0) >= cfg.maxWorkers) {
       if (!turn.priority || extraUsed) continue;
@@ -982,12 +1280,21 @@ async function promote(state, cfg, out) {
       extraUsed = true;
     }
     running++;
-    if (excl) exclusiveRunning = true;
+    if (excl) held.push(repoOf(t));
+    // never start on an account that just hit a limit: each turn is a new Task, so it can move to a healthy model now
+    if (a.model && a.model !== "inherit" && cooling(state, a.model)) {
+      const next = healthyModel(state, t, a.model);
+      if (next) {
+        out.warnings.push(`${t.id}#${turn.n}: ${a.model} is rate-limited until ${state.cooldown[accountOf(a.model)].until}; it starts on ${next}`);
+        a.model = next;
+        t.model = next;
+      }
+    }
     turn.inputs = t.undelivered.splice(0);
     for (const id of turn.inputs) Object.assign(t.inputs.find((i) => i.id === id), { deliveredTo: a.id, turn: turn.n });
     Object.assign(turn, { state: "running", startedAt: now(), extra });
     if (a.state === "pending") Object.assign(a, { state: "running", startedAt: now() });
-    await pi.fs.writeText(turn.brief, t.type === "merge" ? buildMergeBrief(state, cfg, t, a, turn) : buildBrief(state, cfg, t, a, turn));
+    await pi.fs.writeText(turn.brief, t.type === "merge" ? buildMergeBrief(state, cfg, t, a, turn) : t.type === "proof" ? buildProofBrief(state, cfg, t, a, turn) : buildBrief(state, cfg, t, a, turn));
     out.launch.push(launchItem(t, a, turn, cfg));
   }
   out.queued = pending.filter(([, , turn]) => turn.state === "pending").map(([t, , turn]) => `${t.id}#${turn.n}`);
@@ -1037,6 +1344,8 @@ function buildBrief(state, cfg, t, a, turn) {
       ? "\n**Recheck.** Your previous turn reported a final state, but the person wrote while it ran and you have not read it. Decide whether the NEW messages change your result: do what they ask within this ticket, or report the same state again if they change nothing.\n"
       : turn.kind === "go-on"
       ? "\n**Go on.** Your previous turn ended while the work was still in progress. Continue from where it stopped.\n"
+      : turn.kind === "fix"
+      ? "\n**Fix.** The proof worker checked your ready work and found defects: read the NEW proof input and its evidence. Fix each one in your worktree, run your checks, commit, and report `ready` again. If a defect is wrong, say why in your report's evidence and report `ready`; the next proof round judges it.\n"
       : "";
   return `# Ticket ${t.id} · turn ${turn.n}: ${t.title}
 
@@ -1059,7 +1368,7 @@ A routing note is routing context only. It adds no requirement.
 - strength: ${t.mandate.strength}
 - accepted under policy version ${t.mandate.policyVersion}, via ${t.mandate.basis.via}
 - scope: ${t.mandate.scope}
-${rules.length ? `\nThis ticket was accepted proactively under these rules. Your authority is limited to the accepted change within them; recheck that it was really requested, that its target is settled, and that no design decision is open, before you change anything:\n\n${rules.map((r) => `- ${r.name} (${r.id}): ${r.instruction}`).join("\n")}\n` : ""}${siblingSection(state, t)}${splitSection(t)}
+${rules.length ? `\nThis ticket was accepted proactively under these rules. Your authority is limited to the accepted change within them; recheck that it was really requested, that its target is settled, and that no design decision is open, before you change anything:\n\n${rules.map((r) => `- ${r.name} (${r.id}): ${r.instruction}`).join("\n")}\n` : ""}${siblingSection(state, t)}${splitSection(t)}${checkSection(state, t)}
 ## Inputs
 
 ${shown.length ? `Everything that reached this ticket after it started, oldest first. NEW marks what you have not seen in an earlier turn. Decide every NEW message from a person yourself: take it up when it is within this ticket, or hand it back with a reason.\n\n${shown.map((i) => inputLine(state, i, fresh.has(i.id))).join("\n\n")}` : "(none)"}
@@ -1114,39 +1423,47 @@ function afterSection(state, t) {
   return `## Results you build on\n\nThis ticket needs the results of these tickets of the same message, so it started after they ended. Read their reports before you start. Use their results and do not redo their work. If one did not complete and your part cannot be done without it, report blocked and name that ticket.\n\n${pre.map(line).join("\n")}\n\n`;
 }
 
-/** Where a writer works: its own git worktree and branch, or the shared checkout while no other writer runs. */
+/** Where a writer works: its own git worktree and branch, or the shared checkout while no other writer runs there. */
 function isolationSection(t) {
   const iso = t.isolation;
   if (!iso) return "";
-  if (iso.mode === "shared") return "\n## Workspace\n\nYou work in the main checkout of the workspace. No other worker changes files while your turn runs.\n";
+  const repo = iso.repo || "";
+  if (iso.mode === "shared") {
+    return repo
+      ? `\n## Workspace\n\nYou work in the main checkout of the project folder \`${repo}/\` (relative to the workspace root). Change files only under it. No other worker changes files there while your turn runs.\n`
+      : "\n## Workspace\n\nYou work in the main checkout of the workspace. No other worker changes files while your turn runs.\n";
+  }
+  // git runs in the repository folder, so the worktree path in the commands is relative to it
+  const wt = iso.wt || iso.path;
+  const from = repo ? `the repository folder \`${repo}/\`` : "the workspace root";
   return `
 ## Workspace isolation
 
 Other workers can change files at the same time as you. So this ticket works in its own git worktree, on its own branch. Never change files in the main checkout.
-
+${repo ? `\n- repository: \`${repo}/\` (relative to the workspace root): the git repository this ticket changes. Run every git command below from there.` : ""}
 - worktree: \`${iso.path}\` (relative to the workspace root)
 - branch: \`${iso.branch}\`
 - base ref: \`${iso.base}\`, the state your branch starts from. It includes the uncommitted changes the person had at that time.
 
-1. **Set up the worktree** from the workspace root before you change anything. The script skips what an earlier turn already did:
+1. **Set up the worktree** from ${from} before you change anything. The script skips what an earlier turn already did:
 
    \`\`\`sh
-   git rev-parse --is-inside-work-tree   # fails: not a git repository, see step 6
+${repo ? `   cd ${repo}\n` : ""}   git rev-parse --is-inside-work-tree   # fails: not a git repository, see step 6
    x="$(git rev-parse --git-common-dir)/info/exclude"; grep -qxF '.superagent/' "$x" 2>/dev/null || echo '.superagent/' >> "$x"
    if ! git show-ref --verify --quiet refs/heads/${iso.branch}; then
      base=$(git stash create); [ -n "$base" ] || base=$(git rev-parse HEAD)
-     git update-ref ${iso.base} "$base" && git worktree add -b ${iso.branch} ${iso.path} ${iso.base}
-   elif [ ! -e ${iso.path}/.git ]; then
-     git worktree prune && git worktree add ${iso.path} ${iso.branch}
+     git update-ref ${iso.base} "$base" && git worktree add -b ${iso.branch} ${wt} ${iso.base}
+   elif [ ! -e ${wt}/.git ]; then
+     git worktree prune && git worktree add ${wt} ${iso.branch}
    fi
    \`\`\`
 
    The worktree does not contain the person's untracked files: copy the ones you need. It also has no ignored files, such as installed dependencies or build output: install or link them as the project needs.
-2. **Work only in the worktree.** Read and edit the files under \`${iso.path}/\`, and run every command there (\`cd ${iso.path} && …\`).
+2. **Work only in the worktree.** Read and edit the files under \`${iso.path}/\`, and run every command there (\`cd ${iso.path} && …\` from the workspace root).
 3. **Commit your work on your branch** before you report \`ready\`. These local commits are part of the isolation and are always allowed. Never push, and never change another branch or the main checkout.
 4. **Do not merge.** When you report \`ready\`, a merge worker lands your branch in the person's checkout, together with the work of the other workers.
-5. Before you report \`dropped\`, or \`ready\` with \`merge: no\`, remove your worktree and branch: \`git worktree remove --force ${iso.path}; git branch -D ${iso.branch}; git update-ref -d ${iso.base}\`.
-6. If the workspace is not a git repository, or git cannot make the worktree, work in the main checkout as usual and write \`isolation: none\` in your report.
+5. Before you report \`dropped\`, or \`ready\` with \`merge: no\`, remove your worktree and branch from ${from}: \`git worktree remove --force ${wt}; git branch -D ${iso.branch}; git update-ref -d ${iso.base}\`.
+6. If ${repo ? `\`${repo}/\`` : "the workspace"} is not a git repository, or git cannot make the worktree, work in the main checkout as usual${repo ? `, only under \`${repo}/\`,` : ""} and write \`isolation: none\` in your report.
 `;
 }
 
@@ -1155,7 +1472,7 @@ function branchesSection(state, t) {
   if (writes(t)) return "";
   const open = Object.values(state.tickets).filter((s) => s.id !== t.id && liveTicket(s) && s.isolation && s.isolation.mode === "worktree");
   if (!open.length) return "";
-  return `\n## Ticket branches\n\nThese tickets work in their own git worktrees. Their changes are not in the main checkout until a merge lands them. To see the work of a ticket, read its worktree, or run \`git diff <base ref> <branch>\` from the workspace root.\n\n${open.map((s) => `- ${s.id} [${stageLabel(s)}]: branch \`${s.isolation.branch}\`, worktree \`${s.isolation.path}\`, base ref \`${s.isolation.base}\``).join("\n")}\n`;
+  return `\n## Ticket branches\n\nThese tickets work in their own git worktrees. Their changes are not in the main checkout until a merge lands them. To see the work of a ticket, read its worktree, or run \`git diff <base ref> <branch>\` from its repository folder (the workspace root when none is given).\n\n${open.map((s) => `- ${s.id} [${stageLabel(s)}]: ${s.isolation.repo ? `repository \`${s.isolation.repo}/\`, ` : ""}branch \`${s.isolation.branch}\`, worktree \`${s.isolation.path}\`, base ref \`${s.isolation.base}\``).join("\n")}\n`;
 }
 
 function reportSection(turn, extra = []) {
@@ -1191,14 +1508,16 @@ function buildMergeBrief(state, cfg, t, a, turn) {
   const branch = (s) => {
     const origin = state.triggers[s.origin.triggerId];
     const last = [...ticketTurns(s)].reverse().find((x) => x.reportState === "ready");
-    return `### ${s.id}: ${s.title}\n\n- branch: \`${s.isolation.branch}\`\n- base ref: \`${s.isolation.base}\`\n- worktree: \`${s.isolation.path}\`\n- scope: ${s.mandate.scope}\n- report: \`${last ? last.report : "(none)"}\`${last && last.summary ? `: ${last.summary}` : ""}\n\nOriginal request (message ${origin.id}):\n\n${quote(origin.text)}`;
+    return `### ${s.id}: ${s.title}\n\n- branch: \`${s.isolation.branch}\`\n- base ref: \`${s.isolation.base}\`\n- worktree: \`${s.isolation.wt || s.isolation.path}\`${s.isolation.wt ? ` (relative to the repository folder; \`${s.isolation.path}\` from the workspace root)` : ""}\n- scope: ${s.mandate.scope}\n- report: \`${last ? last.report : "(none)"}\`${last && last.summary ? `: ${last.summary}` : ""}\n\nOriginal request (message ${origin.id}):\n\n${quote(origin.text)}`;
   };
   const delivery = teamText(cfg, "delivery");
+  const repo = repoOf(t);
+  const from = repo ? `the repository folder \`${repo}/\` (\`cd ${repo}\` from the workspace root)` : "the workspace root";
   return `# Ticket ${t.id} · turn ${turn.n}: ${t.title}
 
 You are \`${spec.agent}\`, here as the **merge worker**. Type: merge (${spec.about}). Model: ${a.model}. Assignment: ${a.id}. Prompt revision: ${cfg.promptRevision}.
 
-Workers did the tickets below in parallel, each in its own git worktree, on its own branch, and reported them ready. Your job: land all of them in the person's checkout (the workspace root) as one coherent change that works. You do not add features and you do not redo their work.
+Workers did the tickets below in parallel, each in its own git worktree, on its own branch, and reported them ready. Your job: land all of them in the person's checkout (${repo ? `the git repository \`${repo}/\`` : "the workspace root"}) as one coherent change that works. You do not add features and you do not redo their work.
 
 ## Branches to land, in this order
 
@@ -1207,7 +1526,7 @@ ${items.length ? items.map(branch).join("\n\n") : "(none: report dropped)"}
 ## How to merge
 
 1. Read the report of each ticket, so you know what it changed and why.
-2. From the workspace root, land each branch in order. Its change is the diff from its base ref to its branch tip. The base already holds the uncommitted changes the person had then, so you apply only the work of the ticket:
+2. From ${from}, land each branch in order. Its change is the diff from its base ref to its branch tip. The base already holds the uncommitted changes the person had then, so you apply only the work of the ticket:
 
    \`\`\`sh
    git diff --binary <base ref> <branch> | git apply --3way
@@ -1217,7 +1536,7 @@ ${items.length ? items.map(branch).join("\n\n") : "(none: report dropped)"}
 3. Resolve every conflict so that the intent of each ticket stays. Use the reports and the original requests. Never drop the change of a ticket. Never discard, stash, reset or overwrite the person's own changes. If a conflict needs a choice that only the person can make, report \`waiting\` with that one question.
 4. Leave the result as uncommitted changes in the working tree. Unstage what \`git apply --3way\` staged, unless the person had staged changes in the same files. Commit only when an original request or the Delivery requirements ask for it.
 5. When all branches are in, run the relevant build, linter and tests in the main checkout, and fix what the combination broke.
-6. Only when you report \`ready\` or \`dropped\`, clean up each landed branch: \`git worktree remove --force <worktree>; git branch -D <branch>; git update-ref -d <base ref>\`. Keep every branch when you stop for another reason.
+6. Only when you report \`ready\` or \`dropped\`, clean up each landed branch from ${from}: \`git worktree remove --force <worktree>; git branch -D <branch>; git update-ref -d <base ref>\`. Keep every branch when you stop for another reason.
 
 Report \`ready\` when every branch is landed and checked, and \`dropped\` only when no branch held a change to land. The summary is one sentence about the combined outcome the person can use now. In the evidence, give for each ticket what landed, each conflict and how you resolved it, and the checks you ran with their results.
 ${a.recovery ? `\n## Recovery note\n\n${a.recovery}\n` : ""}
@@ -1234,6 +1553,116 @@ ${t.inputs.length ? t.inputs.map((i) => inputLine(state, i, fresh.has(i.id))).jo
 ${delivery || "(none)"}
 
 ${reportSection(turn)}`;
+}
+
+/** For the workers of a checked ticket: who writes the acceptance tests, who proves the work, and what a fix turn is. */
+function checkSection(state, t) {
+  const g = checkOf(state, t);
+  if (!g) return "";
+  const spec = g.spec ? state.tickets[g.spec] : null;
+  if (t.type === "spec") {
+    const members = g.members.map((id) => state.tickets[id]).filter(Boolean);
+    const file = `${ticketDir(t.id)}/checklist.md`;
+    return `
+## Your job: acceptance checks
+
+Other workers implement this request at the same time. You do not implement it, and you do not read their branches: your checks come from the request alone, so they catch what the implementation missed.
+
+${members.map((m) => `- ${m.id} (${m.type}): ${m.mandate.scope}`).join("\n")}
+
+1. Write \`${file}\` (relative to the workspace root, outside your worktree) with 3 to 10 numbered acceptance criteria. Each one is checkable: give the test that covers it, or the command or observation that shows it.
+2. In your worktree, write acceptance tests in the project's own test framework and style, next to its existing tests. Test the behaviour the request asks for, through the most stable public surface, plus its main edge cases. Nothing more: small and sharp beats wide. The tests fail now; that is expected. Never change product code.
+3. Where the request leaves a name or an interface open, use the most obvious choice and put a comment \`ASSUMPTION: …\` on the test. The proof worker may ask you to adapt it to what the implementation chose.
+4. Commit the tests on your branch and report \`ready\`. When the project has no tests, or the change cannot be tested by code (looks, wording), write only the checklist and report \`ready\` with \`merge: no\`.
+
+On a fix turn, the proof worker found that some of your tests are wrong: they contradict the request, or test a choice the request left open. Correct only those, commit, and report \`ready\` again.
+`;
+  }
+  return `
+## Quality check
+
+When you report \`ready\`, your work is not merged at once. ${spec ? `Ticket ${spec.id} writes acceptance tests from the same request, in parallel; do not write them yourself, but your own unit tests are welcome. ` : ""}A proof worker on another model then ${spec ? "runs those tests on your work and " : ""}checks that it does what the request asks, fits the codebase and fits the other parts of the request. It sends defects back to you as a fix turn, until the work passes. So report \`ready\` only when your own checks pass.
+`;
+}
+
+/** The brief of a proof ticket: check the ready work of its group, in one combined state, and judge it. */
+function buildProofBrief(state, cfg, t, a, turn) {
+  const spec0 = TASK_TYPES.proof;
+  const g = checkOf(state, t) || { members: [], runs: 0 };
+  const origin = state.triggers[t.origin.triggerId];
+  const fresh = new Set(turn.inputs);
+  const members = g.members.map((id) => state.tickets[id]).filter((x) => x && liveTicket(x));
+  const spec = g.spec ? state.tickets[g.spec] : null;
+  const reports = ticketTurns(t).filter((x) => x.reportState).map((x) => `- turn ${x.n}: ${x.reportState}: ${x.summary || "(no summary)"} (${x.report})`);
+  const where = (s) => {
+    const last = [...ticketTurns(s)].reverse().find((x) => x.reportState === "ready");
+    const iso = s.isolation || {};
+    const loc = iso.mode === "worktree"
+      ? `${iso.repo ? `repository \`${iso.repo}/\`, ` : ""}branch \`${iso.branch}\`, base ref \`${iso.base}\`, worktree \`${iso.path}\``
+      : "in the main checkout";
+    return `- ${s.id} (${s.type}): ${s.mandate.scope}\n  ${loc}\n  latest report: \`${last ? last.report : "(none)"}\`${last && last.summary ? `: ${last.summary}` : ""}`;
+  };
+  const branches = [...members, spec].filter((s) => s && s.isolation && s.isolation.mode === "worktree");
+  const repos = [...new Set(branches.map((s) => s.isolation.repo || ""))];
+  const scratch = (r) => `${r ? `${r}/` : ""}${WORKTREE_DIR}/${t.id}`;
+  const setup = branches.length ? `2. **Build the combined state** in a scratch worktree${repos.length > 1 ? " per repository" : ""}, never in the person's checkout:
+
+${repos.map((r) => {
+    const bs = branches.filter((s) => (s.isolation.repo || "") === r);
+    return `   \`\`\`sh
+${r ? `   cd ${r}\n` : ""}   git worktree remove --force ${WORKTREE_DIR}/${t.id} 2>/dev/null; git worktree add --detach ${WORKTREE_DIR}/${t.id} ${bs[0].isolation.branch}
+   cd ${WORKTREE_DIR}/${t.id}
+${bs.slice(1).map((s) => `   git diff --binary ${s.isolation.base} ${s.isolation.branch} | git apply --3way`).join("\n")}
+   \`\`\``;
+  }).join("\n\n")}
+
+   A conflict between two tickets is a coherence defect: report it on both.` : "2. The work is in the main checkout. Read it there; change nothing.";
+  return `# Ticket ${t.id} · turn ${turn.n}: ${t.title}
+
+You are \`${spec0.agent}\`, here as the **proof worker**. Type: proof (${spec0.about}). Model: ${a.model}. Assignment: ${a.id}. Prompt revision: ${cfg.promptRevision}. Proof round ${g.runs} of at most ${cfg.proofRounds}.
+
+Workers reported the tickets below ready. Before their work reaches the person, you decide whether it is good: it passes its acceptance tests, and it is coherent. You never fix anything yourself; you send precise defects back to the worker that owns them.
+
+## Original request
+
+${quote(origin.text)}
+
+## Work to prove
+
+${members.map(where).join("\n")}
+${spec ? `\nAcceptance tests: ticket ${spec.id}, written from the request alone.\n${where(spec)}\n  checklist: \`${ticketDir(spec.id)}/checklist.md\`` : "\nNo acceptance tests were written for this request: use the project's own tests and the request."}
+
+## How to prove
+
+Be economical: read diffs and what they touch, not whole projects. Run the acceptance tests and the existing tests near the change, not every slow suite.
+
+1. Read each latest report${spec ? " and the checklist" : ""}.
+${setup}
+3. **Quality.** Run ${spec ? "the acceptance tests, then " : ""}the project's relevant build, linter and tests in the combined state. Every failure is a defect, unless it fails the same way without this work.
+4. **Coherence.** Read each diff (\`git diff <base ref> <branch>\`) and check that:
+   - it does what the request asks, all of it, within its ticket's scope, and nothing it did not ask;
+   - it follows the conventions around it: names, structure, error handling, style, existing helpers instead of new copies;
+   - the parts fit together: shared names, interfaces and data agree, and nothing is done twice;
+   - it leaves no debug output, dead code, stubs, TODOs, skipped or weakened tests.
+5. ${branches.length ? `Remove the scratch worktree: \`git worktree remove --force ${WORKTREE_DIR}/${t.id}\`${repos.some(Boolean) ? " (from each repository folder)" : ""}.` : "Change nothing."}
+
+A defect is something that is wrong or missing, with evidence. A taste of style that the codebase does not settle is not a defect. An acceptance test that contradicts the request, or that tests a name or interface the request left open where the implementation made a sound other choice, is a defect of the tests (\`spec_bugs\`), not of the work.
+
+Report \`state: ready\` with your verdict, also when it is \`fail\`. Use \`blocked\` only when you cannot run the checks at all.
+${a.recovery ? `\n## Recovery note\n\n${a.recovery}\n` : ""}
+## Earlier rounds
+
+${reports.length ? `Read your latest report: check that each defect it found is fixed, and look again at everything.\n\n${reports.join("\n")}` : "(none: this is the first round)"}
+
+## Inputs
+
+${t.inputs.length ? t.inputs.map((i) => inputLine(state, i, fresh.has(i.id))).join("\n\n") : "(none)"}
+
+${reportSection(turn, [
+    "verdict: <pass | fail>",
+    "bugs: <ticket-id: what is wrong, where (file:line), how to see it (command or test); ticket-id: …> or none",
+    "spec_bugs: <which acceptance tests are wrong, and why> or none",
+  ])}`;
 }
 
 /** Parse a worker report: `key: value` header lines up to `---`, then the evidence. */
@@ -1274,6 +1703,10 @@ function parseReport(text) {
     // writers in a worktree: where they worked, and whether their branch holds a change to land (null: not said)
     isolation: str(head.isolation).toLowerCase().trim() || null,
     merge: "merge" in head ? !/^(no|none|false|nothing)\b/i.test(str(head.merge).trim()) : null,
+    // proof workers: the verdict, the defects per ticket, and the defects of the acceptance tests themselves
+    verdict: ["pass", "fail"].includes(str(head.verdict).toLowerCase().replace(/[`*]/g, "").split(/[\s|,.]/)[0]) ? str(head.verdict).toLowerCase().replace(/[`*]/g, "").split(/[\s|,.]/)[0] : null,
+    bugs: pairs("bugs"),
+    spec_bugs: value("spec_bugs"),
     body: lines.slice(i).join("\n").trim(),
   };
 }
@@ -1295,13 +1728,14 @@ function handBack(state, cfg, t, triggerId, reason, out) {
   return true;
 }
 
-/** A writer's report says where it worked: git found means worktrees may run side by side; no git means one writer at a time. */
+/** A writer's report says where it worked: git found means worktrees may run side by side in its repository folder; no git means one writer at a time there. */
 function learnIsolation(state, t, rep) {
   if (!writes(t) || t.type === "merge" || !t.isolation || t.isolation.mode !== "worktree") return;
+  const repo = repoOf(t);
   if (/^(none|shared|no\b)/.test(rep.isolation || "")) {
-    t.isolation = { mode: "shared" };
-    if (state.vcs !== "git") state.vcs = "none";
-  } else if (/^worktree/.test(rep.isolation || "")) state.vcs = "git";
+    t.isolation = { mode: "shared", ...(repo ? { repo } : {}) };
+    if (vcsOf(state, repo) !== "git") setVcs(state, repo, "none");
+  } else if (/^worktree/.test(rep.isolation || "")) setVcs(state, repo, "git");
 }
 
 function freshOut() {
@@ -1353,21 +1787,55 @@ const THINKING_LINE = /^thinkingLevel:[ \t]*(\S+)[ \t]*$/m;
  * The persona text to install. The Task tool takes no thinking level, so the sub-agent runs at the
  * thinkingLevel of its definition: step it down past the levels in excludeThinking.
  */
-function personaBody(name, exclude = DEFAULT_EXCLUDE_THINKING) {
+function personaBody(name, exclude = DEFAULT_EXCLUDE_THINKING, fallbacks = []) {
   const text = fs.readFileSync(path.join(personaSource(), name), "utf8");
-  return text.replace(THINKING_LINE, (line, level) => (THINKING.includes(level) ? `thinkingLevel: ${allowedThinking(level, exclude)}` : line));
+  const body = text.replace(THINKING_LINE, (line, level) => (THINKING.includes(level) ? `thinkingLevel: ${allowedThinking(level, exclude)}` : line));
+  // the host moves a sub-agent that hit a limit to these models, in the same session, without a new launch
+  return fallbacks.length ? body.replace(/^(thinkingLevel:.*)$/m, `$1\nfallbackModels: [${fallbacks.join(", ")}]`) : body;
 }
 
-/** A persona without its thinking level, to tell an untouched installed copy from an edited one. */
-const withoutThinking = (text) => String(text).replace(THINKING_LINE, "");
+const FALLBACK_LINE = /^fallbackModels:.*\n?/m;
+/** A persona without the lines this plugin writes (thinking level, fallbacks), to tell an untouched installed copy from an edited one. */
+const withoutThinking = (text) => String(text).replace(FALLBACK_LINE, "").replace(THINKING_LINE, "");
 
-function installPersonas(exclude = DEFAULT_EXCLUDE_THINKING) {
+/**
+ * The host's fallback models of each worker definition: one model per provider account, best first for the
+ * worker's main task type, and never on the account of that type's first choice, which is the one that would
+ * have hit the limit. Limits hold per account, so a second model on the same account would only wait again.
+ */
+function personaFallbacks(entries, cfg) {
+  const out = {};
+  if (!entries.length) return out;
+  for (const agent of AGENTS) {
+    const type = Object.keys(TASK_TYPES).find((k) => TASK_TYPES[k].agent === agent && !TASK_TYPES[k].internal);
+    if (!type) continue;
+    let route;
+    try {
+      route = routeTask({ id: `persona-${agent}`, type, req: normalizeRequirements({}, type).req }, routingContext(entries, cfg));
+    } catch {
+      continue;
+    }
+    if (!route.model || route.model === "inherit") continue;
+    const ranked = [route.model, ...route.fallbacks, ...route.candidates.map((c) => c.split(" ")[0])];
+    const seen = new Set([accountOf(route.model)]);
+    const picks = [];
+    for (const id of ranked) {
+      if (picks.length >= MAX_FALLBACKS || seen.has(accountOf(id)) || matchesAny(id, cfg.exclude)) continue;
+      seen.add(accountOf(id));
+      picks.push(id);
+    }
+    out[agent] = picks;
+  }
+  return out;
+}
+
+function installPersonas(exclude = DEFAULT_EXCLUDE_THINKING, fallbacks = {}) {
   const dst = personaTarget();
   const wanted = new Set(AGENTS.map((a) => `${a}.md`));
   fs.mkdirSync(dst, { recursive: true });
   const changed = [];
   for (const name of wanted) {
-    const body = Buffer.from(personaBody(name, exclude), "utf8");
+    const body = Buffer.from(personaBody(name, exclude, fallbacks[name.replace(/\.md$/, "")] || []), "utf8");
     const target = path.join(dst, name);
     let current = null;
     try {
@@ -1392,9 +1860,9 @@ function installPersonas(exclude = DEFAULT_EXCLUDE_THINKING) {
 }
 
 /** Install the personas with the thinking levels the settings allow, and record the outcome. */
-function syncPersonas(exclude) {
+function syncPersonas(exclude, fallbacks) {
   try {
-    const changed = installPersonas(exclude);
+    const changed = installPersonas(exclude, fallbacks);
     if (changed.length) personaStatus = `installed or updated: ${changed.join(", ")}`;
     else if (!/^installed/.test(personaStatus)) personaStatus = "installed and up to date";
   } catch (e) {
@@ -1429,6 +1897,7 @@ async function withState(fn) {
     recoverStale(state, cfg, out);
   }
   const value = await fn(state, cfg, out);
+  await scheduleProofs(state, cfg, out);
   await scheduleMerges(state, cfg, out);
   await promote(state, cfg, out);
   // stages as they stand after the launch
@@ -1542,19 +2011,22 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
     if (split && !scope) fail(`${where}scope is required when one message starts several tickets: one sentence naming the part of the message this ticket owns`);
     const { req, warnings } = normalizeRequirements(spec.requirements, `${where}requirements`);
     out.warnings.push(...warnings);
+    // a tickets[] entry without its own repo takes the item's
+    const repo = normalizeRepo(spec.repo !== undefined ? spec.repo : split ? fields.repo : undefined, where);
+    const check = checkLevel(cfg, type, spec.check !== undefined ? spec.check : split ? fields.check : undefined, where);
     const id = uniqueTicketId(state, slug(spec.name || title), reserved);
     reserved.add(id);
     const route = routeTask({ id, type, req }, ctx);
     ctx.chosen.set(id, route.model); // a later ticket of the same message may ask for differentFrom this one
     out.warnings.push(...route.warnings);
-    return { id, type, title, note, req, route, scope: scope || title };
+    return { id, type, title, note, req, route, repo, check, scope: scope || title };
   });
   resolveAfter(specs, drafts, split);
   if (fields.requireAck && !ack) fail("acknowledgement is required: one short sentence naming the concrete change and its intended result");
   checkWords(ack, IM_WORDS, "the acknowledgement");
   const ids = drafts.map((d) => d.id);
   const made = drafts.map((d) => {
-    const { id, type, title, note, req, route } = d;
+    const { id, type, title, note, req, route, repo } = d;
     const mandate = {
       strength: ev.strength, policyVersion: ev.policyVersion,
       basis: { ...ev.basis, ...(fields.rules ? { rules: fields.rules } : {}) },
@@ -1563,7 +2035,7 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
     const t = {
       id, title, type, decisionId: null, mandate, channels: [thread.key], attention: undefined, assignments: [], inputs: [],
       undelivered: [], answers: [], createdAt: now(), updatedAt: now(), origin: { triggerId: ev.primary, triggerIds: ev.triggerIds },
-      note, req, model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+      note, req, ...(repo ? { repo } : {}), model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
       // the suggested thinking level of every model the ticket may run on, so a failover keeps a valid one
       thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
       ...(split ? { siblings: ids.filter((x) => x !== id) } : {}),
@@ -1584,18 +2056,24 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
     reason: [{ code: "accepted", text: str(fields.reason) }], ...(fields.audit ? { audit: fields.audit } : {}),
   }, out);
   for (const t of made) t.decisionId = decision.id;
+  // checks: the parts that start now are proved together, so the proof also sees whether they fit; a part that
+  // needs the results of others starts after their merge, so it is proved on its own
+  const lvl = (t) => drafts.find((d) => d.id === t.id).check;
+  const first = made.filter((t) => !t.after && lvl(t) !== "none");
+  if (first.length) createCheckGroup(state, cfg, ctx, first, first.some((t) => lvl(t) === "full") ? "full" : "proof", out);
+  for (const t of made.filter((t) => t.after && lvl(t) !== "none")) createCheckGroup(state, cfg, ctx, [t], lvl(t), out);
   if (ack) {
     const rid = `ack:${ev.primary}`;
     if (!state.outbox.some((r) => r.id === rid)) state.outbox.push({ id: rid, purpose: "acknowledgement", ticketId: ids[0], ...(split ? { ticketIds: ids } : {}), triggerId: ev.primary, text: ack, at: now() });
   }
-  const view = (d) => ({ ticket: d.id, agent: TASK_TYPES[d.type].agent, model: d.route.model, fallbacks: d.route.fallbacks, thinking: d.route.thinking, why: d.route.why });
+  const view = (d) => ({ ticket: d.id, agent: TASK_TYPES[d.type].agent, model: d.route.model, fallbacks: d.route.fallbacks, thinking: d.route.thinking, why: d.route.why, ...(d.check !== "none" ? { check: d.check } : {}) });
   const post = ack ? { post: ack } : {};
   if (split) return { tickets: drafts.map(view), decision: decision.id, ...post };
   return { ...view(drafts[0]), decision: decision.id, ...post };
 }
 
 /** A ticket may split itself on its first turn: a person's explicit request, not yet a part of a split, not a merge. */
-const maySplit = (t) => t.type !== "merge" && t.mandate.strength === "explicit" && !t.siblings && !t.parent && ticketTurns(t).length === 1;
+const maySplit = (t) => !TASK_TYPES[t.type].internal && t.mandate.strength === "explicit" && !t.siblings && !t.parent && ticketTurns(t).length === 1;
 
 /**
  * The worker found that its ticket holds independent parts: one new ticket per part, in parallel (an entry with
@@ -1636,7 +2114,7 @@ function splitTicket(state, cfg, catalog, t, entries, out) {
     const c = {
       id, title: `${t.title} (${d.name})`.slice(0, 200), type, decisionId: t.decisionId, mandate: { ...t.mandate, scope: d.scope },
       channels: [...t.channels], attention: undefined, assignments: [], inputs: [], undelivered: [], answers: [], createdAt: now(), updatedAt: now(),
-      origin: { ...t.origin }, note: t.note, req: t.req, model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
+      origin: { ...t.origin }, note: t.note, req: t.req, ...(t.repo ? { repo: t.repo } : {}), model: route.model, chain: [route.model, ...route.fallbacks], why: route.why, thinking: route.thinking,
       thinkingByModel: Object.fromEntries([route.model, ...route.fallbacks].map((m) => [m, ctx.profiles.has(m) ? thinkingFor(type, t.req, ctx.profiles.get(m), ctx.excludeThinking) : route.thinking])),
       siblings: ids.filter((x) => x !== id), parent: t.id, ...(d.after.length ? { after: d.after } : {}),
     };
@@ -1653,6 +2131,18 @@ function splitTicket(state, cfg, catalog, t, entries, out) {
   }
   // the parts own the thread now: a follow-up goes to them, never back to the ticket that split
   for (const th of threads) th.subscriptions = th.subscriptions.filter((x) => x !== t.id);
+  // checks: writer parts that start now take the split ticket's place in its group; a part that waits for others is proved alone
+  const g = checkOf(state, t);
+  if (g) {
+    const parts = ids.map((id) => state.tickets[id]).filter((c) => writes(c));
+    g.members = [...g.members.filter((id) => id !== t.id), ...parts.filter((c) => !c.after).map((c) => c.id)];
+    for (const c of parts.filter((c) => !c.after)) c.check = g.id;
+    const later = parts.filter((c) => c.after);
+    if (later.length) {
+      const lctx = routingContext(catalog.entries, cfg);
+      for (const c of later) createCheckGroup(state, cfg, lctx, [c], "proof", out);
+    }
+  }
   t.splitInto = ids;
   return ids;
 }
@@ -1704,6 +2194,10 @@ async function superConfig(args) {
       policyTouched = true;
     }
     if (policyTouched) patch.policy = policy;
+    if (a.proofRounds !== undefined) {
+      if (!Number.isInteger(a.proofRounds) || a.proofRounds < 0 || a.proofRounds > MAX_PROOF_ROUNDS) fail(`proofRounds must be an integer from 0 to ${MAX_PROOF_ROUNDS}`);
+      patch.proofRounds = a.proofRounds;
+    }
     if (a.maxWorkers !== undefined) {
       if (!Number.isInteger(a.maxWorkers) || a.maxWorkers < 1 || a.maxWorkers > MAX_WORKERS) fail(`maxWorkers must be an integer from 1 to ${MAX_WORKERS}`);
       patch.maxWorkers = a.maxWorkers;
@@ -1761,9 +2255,9 @@ async function superConfig(args) {
     await pi.plugin.setSettings(patch);
   }
   const cfg = await settings();
-  // the installed worker definitions carry the thinking level; keep them in line with excludeThinking
-  syncPersonas(cfg.excludeThinking);
   const catalog = await loadCatalog();
+  // the installed worker definitions carry the thinking level and the fallback models; keep them in line with the settings
+  syncPersonas(cfg.excludeThinking, personaFallbacks(catalog.entries, cfg));
   const ctx = routingContext(catalog.entries, cfg);
   return withState(async (state, _cfg, out) => {
     if (action === "set") {
@@ -1798,11 +2292,13 @@ async function superConfig(args) {
       models: catalog.entries.map((e) => profileLine(e.id, ctx.profiles.get(e.id)) + (matchesAny(e.id, cfg.exclude) ? " EXCLUDED" : "")),
       legend: "R reasoning, C coding, W writing, X context, S speed, $ cheapness (1–5); * = overridden in settings",
       policy: { version: policyVersion(cfg), mode: cfg.policy.mode, rules: cfg.policy.rules, allowed: sourcePart(cfg).allowed, admission: { ...ADMISSION_DEFAULTS, ...sourcePart(cfg).admission[SOURCE] } },
-      paused: cfg.paused, maxWorkers: cfg.maxWorkers, evalTimeoutSeconds: cfg.evalTimeoutSeconds,
+      paused: cfg.paused, maxWorkers: cfg.maxWorkers, evalTimeoutSeconds: cfg.evalTimeoutSeconds, proofRounds: cfg.proofRounds,
       isolation: cfg.isolation,
       writers: parallelWriters(cfg, state) ? "in parallel, each in its own git worktree; a merge worker lands their branches"
         : cfg.isolation === "serial" || state.vcs === "none" ? "one at a time in the shared checkout"
-          : "one at a time until a worker confirms that the workspace is a git repository, then in parallel worktrees",
+          : "one at a time until git is found in the workspace (or a worker confirms it), then in parallel worktrees",
+      repos: Object.fromEntries(Object.entries(state.repos || {}).map(([r, v]) => [r, parallelWriters(cfg, state, r) ? "parallel worktrees" : v === "none" ? "one writer at a time" : "unknown"])),
+      cooldown: Object.fromEntries(Object.entries(state.cooldown || {}).filter(([, c]) => Date.parse(c.until) > Date.now()).map(([acct, c]) => [acct, `rate-limited until ${c.until} (${c.model})`])),
       roleModels: cfg.pins, overrides: cfg.profiles, exclude: cfg.exclude, excludeThinking: cfg.excludeThinking, notes: cfg.notes,
       team: Object.fromEntries(Object.keys(TEAM_KEYS).map((n) => [n, cfg.team[n] ? `custom (${cfg.team[n].length} chars)` : "default"])),
       promptRevision: cfg.promptRevision,
@@ -2066,6 +2562,9 @@ async function ticketReport(state, cfg, a, out) {
   const t = requireTicket(state, a.ticket);
   const n = Number.isInteger(a.turn) ? a.turn : ticketTurns(t).length;
   const { a: asg, turn } = turnOf(t, n);
+  // the host may have hit a limit and moved the worker to a fallback model: no new launch goes to that account for a while
+  const limited = learnLimits(state, [a.failures, a.error, a.text].map(str).join("\n"));
+  if (limited.length) out.warnings.push(`rate-limited, cooling for ${LIMIT_COOLDOWN_MS / 60000} min: ${limited.join(", ")}`);
   if (!turn) fail(`ticket ${t.id} has no turn ${n}`);
   if (turn.state === "ended") return { ticket: t.id, stage: stageLabel(t), note: `turn ${n} is already recorded (${turn.outcome})`, handoff: { kind: "none" } };
   if (turn.state === "pending") fail(`turn ${n} of ${t.id} was never launched`);
@@ -2085,12 +2584,18 @@ async function ticketReport(state, cfg, a, out) {
       : text == null ? `no report at ${turn.report}` : `the report at ${turn.report} has no valid state line`;
     const limit = outcome === "error" && LIMIT.test(reason);
     const transient = outcome === "error" && TRANSIENT.test(reason);
-    // limits are per provider account: fail over to another provider first, else to the next model
-    const rest = t.chain.slice(t.chain.indexOf(t.model) + 1);
-    const prov = (id) => str(id).split("/")[0];
-    const nextModel = rest.find((x) => prov(x) !== prov(t.model)) || rest[0];
+    const from = asg.model || t.model;
+    let nextModel;
+    if (limit && ACCOUNT_LIMIT.test(reason)) {
+      // an account limit holds for every ticket: cool the account, and move to a model that is not cooling
+      coolAccount(state, from, reason);
+      nextModel = healthyModel(state, t, from);
+    } else {
+      // a limit of this request (such as its context window): the next model of the chain, another provider first
+      const rest = t.chain.slice(t.chain.indexOf(t.model) + 1);
+      nextModel = rest.find((x) => accountOf(x) !== accountOf(t.model)) || rest[0];
+    }
     if (limit && nextModel) {
-      const from = t.model;
       t.model = nextModel;
       restartAssignment(state, t, `Turn ${n} on ${from} hit a limit (${reason}). It may have changed files: check the workspace and any earlier report before you repeat an action.`, "model limit");
       return { ticket: t.id, stage: stageLabel(t), note: `limit on ${from}: failed over to ${nextModel}`, handoff: { kind: "none" } };
@@ -2155,11 +2660,17 @@ async function ticketReport(state, cfg, a, out) {
   const human = hasHumanUndelivered(t);
   // the person wrote while this turn ran and the worker could not read it: it reads it before the ticket ends
   const recheck = human && (rep.state === "ready" || rep.state === "dropped");
+  // checked work waits for its proof first: it reaches the merge, or the person, only once it passed
+  const g = checkOf(state, t);
+  const toProof = !recheck && rep.state === "ready" && t.type !== "proof" && rep.merge !== false && !!g && g.state !== "passed" && g.state !== "escalated" && g.state !== "closed";
   // a writer's ready branch waits for the merge worker; the person hears the result once it is landed
-  const toMerge = !recheck && rep.state === "ready" && t.type !== "merge" && t.isolation && t.isolation.mode === "worktree" && rep.merge !== false;
+  const toMerge = !recheck && !toProof && rep.state === "ready" && t.type !== "merge" && t.type !== "proof" && t.isolation && t.isolation.mode === "worktree" && rep.merge !== false;
   let merged = null;
+  let proved = null;
   if (recheck) wake(state, t, { kind: "recheck", priority: true });
   else if (t.type === "merge" && (rep.state === "ready" || rep.state === "dropped")) merged = finishMerge(state, cfg, t, rep, out);
+  else if (t.type === "proof" && rep.state === "ready") proved = finishProof(state, cfg, t, rep, out);
+  else if (toProof) t.hold = { state: "proof", at, turn: n };
   else if (toMerge) t.merge = { state: "queued", at, turn: n };
   else if (rep.state === "ready") endTicket(state, cfg, t, { by: "executor", outcome: "completed" }, out);
   else if (rep.state === "dropped") endTicket(state, cfg, t, { by: "executor", outcome: "dropped" }, out);
@@ -2173,9 +2684,11 @@ async function ticketReport(state, cfg, a, out) {
   }
   if (liveTicket(t) && t.undelivered.length) wake(state, t, { priority: human });
   const answer = triggerOk(rep.reply_to_trigger_id) ? { trigger_id: rep.reply_to_trigger_id, summary: rep.summary } : undefined;
-  let handoff = recheck || toMerge ? { kind: "none" } : handoffFor(t, rep);
+  let handoff = recheck || toMerge || toProof ? { kind: "none" } : proved ? proved.handoff : handoffFor(t, rep);
   if (merged && merged.length) handoff = { kind: "result", summary: rep.summary, purpose: "result", merged };
   const held = recheck ? { note: `held: the person wrote while turn ${n} ran; the worker reads it before reporting ${rep.state} again` }
+    : toProof ? { note: "ready: held for its proof; it goes to the merge, or to the person, once the proof passes" }
+    : proved ? { note: proved.note }
     : toMerge ? { note: `ready on branch ${t.isolation.branch}: queued for the merge worker; the result goes to the person once it is landed` } : {};
   return { ticket: t.id, stage: stageLabel(t), handoff, ...held, ...(answer ? { answer } : {}), ...(handbacks.length ? { handbacks } : {}) };
 }
@@ -2284,7 +2797,7 @@ async function superTicket(args) {
 
 /** The overview: what waits for a person first, then working, queued and idle tickets; a healthy state takes no space. */
 function ticketList(state, cfg) {
-  const order = ["person/answer", "person/review", "person/blocked", "person/failed", "working", "working/merge", "working/queued", "idle"];
+  const order = ["person/answer", "person/review", "person/blocked", "person/failed", "working", "working/proof", "working/merge", "working/queued", "idle"];
   const line = (t) => `${t.id} [${stageLabel(t)}] ${t.type} on ${t.model}: ${t.title}${t.attention ? ` · asks: ${t.attention.question}` : ""}`
     + `${t.merge && t.merge.state === "unmerged" ? ` · branch ${t.isolation.branch} not merged (superagent_ticket merge)` : ""}`
     + `${afterOpen(state, t).length ? ` · waits for ${afterOpen(state, t).join(", ")}` : ""}`;
@@ -2324,6 +2837,8 @@ const ACCEPT_FIELDS = {
   type: { type: "string", enum: TYPES, description: "accept: the type of task, which picks the worker and its model" },
   requirements: REQ_SCHEMA,
   scope: { type: "string", description: "accept: one sentence naming the work the mandate allows; defaults to the title" },
+  check: { type: "string", enum: CHECK_LEVELS, description: "accept: how the work of a code, debug, test or docs ticket is checked before it is merged. full: a test worker writes acceptance tests from the request while the worker implements, then a proof worker on another model runs them and checks that the change fits the request and the codebase, and sends defects back until it passes. proof: the proof only. none: no check, for a trivial change (a label, a constant, a one-line fix). Default: full for code and debug, proof for test, none for docs" },
+  repo: { type: "string", description: "accept: optional, the project folder the ticket changes when it is its own git repository inside a workspace that holds several (for example neural-radar), relative to the workspace root. Writers in it then run in parallel git worktrees of that repository. On tickets[] entries it defaults to the item's repo. Leave it out when the workspace root is the repository" },
 };
 
 const TOOLS = [
@@ -2339,6 +2854,7 @@ const TOOLS = [
         rules: { type: "array", items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, enabled: { type: "boolean" }, instruction: { type: "string" } } }, description: "set: the full rule list" },
         allowed: { type: "array", items: { type: "string" }, description: "set: sender ids allowed to request work (default [\"person\"])" },
         admission: { type: "object", description: "set: { listedUnaddressed: inferred|ignore, unlistedAddressed: explicit|inferred|ignore, unlistedUnaddressed: inferred|ignore }" },
+        proofRounds: { type: "integer", description: `set: how many times a proof worker may send defects back to the workers of a checked ticket before the person decides, 0–${MAX_PROOF_ROUNDS} (default ${DEFAULT_PROOF_ROUNDS}); 0 turns acceptance tests and proofs off` },
         maxWorkers: { type: "integer", description: `set: concurrent worker turns, 1–${MAX_WORKERS} (default ${DEFAULT_WORKERS}); one extra slot is kept for a person's message` },
         evalTimeoutSeconds: { type: "integer", description: `set: how long a candidate waits for a decision, 30–3600 (default ${DEFAULT_EVAL_TIMEOUT})` },
         paused: { type: "boolean", description: "set: pause or resume processing (evals, launches, replies); messages are still recorded" },
@@ -2480,6 +2996,7 @@ const TOOLS = [
         attempt: { type: "integer", description: "report: the launch item's attempt number" },
         outcome: { type: "string", enum: ["returned", "error"], description: "report: the sub-agent returned, or failed (error, timeout, limit)" },
         error: { type: "string", description: "report: the failure text" },
+        failures: { type: "string", description: "report: every `Model … failed (…)` line of the Task result, verbatim, also when the worker then returned; a rate-limited account then gets no new launch for a while" },
         text: { type: "string", description: "report: the sub-agent's reply, used only when it wrote no report file. note: one fact from other work, at most 100 words" },
         model: { type: "string", description: "retry: run on this model instead (a new worker session)" },
         thread: { type: "string", description: "unsubscribe: the thread key" },
@@ -2493,12 +3010,15 @@ const TOOLS = [
 
 async function onLoad() {
   let exclude = DEFAULT_EXCLUDE_THINKING;
+  let fallbacks = {};
   try {
-    exclude = (await settings()).excludeThinking;
+    const cfg = await settings();
+    exclude = cfg.excludeThinking;
+    fallbacks = personaFallbacks((await loadCatalog()).entries, cfg);
   } catch {
-    // settings unreadable: install with the default exclusions
+    // settings unreadable: install with the default exclusions and no fallbacks
   }
-  syncPersonas(exclude);
+  syncPersonas(exclude, fallbacks);
   for (const tool of TOOLS) {
     await pi.agent.registerTool({
       name: tool.name,

@@ -86,9 +86,13 @@
 							"type": "object",
 							"description": "set: { listedUnaddressed: inferred|ignore, unlistedAddressed: explicit|inferred|ignore, unlistedUnaddressed: inferred|ignore }"
 						},
+						"proofRounds": {
+							"type": "integer",
+							"description": "set: how many times a proof worker may send defects back to the workers of a checked ticket before the person decides, 0–6 (default 3); 0 turns acceptance tests and proofs off"
+						},
 						"maxWorkers": {
 							"type": "integer",
-							"description": "set: concurrent worker turns, 1–8 (default 3); one extra slot is kept for a person's message"
+							"description": "set: concurrent worker turns, 1–8 (default 6); one extra slot is kept for a person's message"
 						},
 						"evalTimeoutSeconds": {
 							"type": "integer",
@@ -311,6 +315,19 @@
 										"type": "string",
 										"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
 									},
+									"check": {
+										"type": "string",
+										"enum": [
+											"full",
+											"proof",
+											"none"
+										],
+										"description": "accept: how the work of a code, debug, test or docs ticket is checked before it is merged. full: a test worker writes acceptance tests from the request while the worker implements, then a proof worker on another model runs them and checks that the change fits the request and the codebase, and sends defects back until it passes. proof: the proof only. none: no check, for a trivial change (a label, a constant, a one-line fix). Default: full for code and debug, proof for test, none for docs"
+									},
+									"repo": {
+										"type": "string",
+										"description": "accept: optional, the project folder the ticket changes when it is its own git repository inside a workspace that holds several (for example neural-radar), relative to the workspace root. Writers in it then run in parallel git worktrees of that repository. On tickets[] entries it defaults to the item's repo. Leave it out when the workspace root is the repository"
+									},
 									"tickets": {
 										"type": "array",
 										"description": "accept: when the message holds several separate requests, one entry per request (2–8); they run in parallel, except an entry with after, which starts once those tickets ended. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them",
@@ -349,6 +366,19 @@
 												"scope": {
 													"type": "string",
 													"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
+												},
+												"check": {
+													"type": "string",
+													"enum": [
+														"full",
+														"proof",
+														"none"
+													],
+													"description": "accept: how the work of a code, debug, test or docs ticket is checked before it is merged. full: a test worker writes acceptance tests from the request while the worker implements, then a proof worker on another model runs them and checks that the change fits the request and the codebase, and sends defects back until it passes. proof: the proof only. none: no check, for a trivial change (a label, a constant, a one-line fix). Default: full for code and debug, proof for test, none for docs"
+												},
+												"repo": {
+													"type": "string",
+													"description": "accept: optional, the project folder the ticket changes when it is its own git repository inside a workspace that holds several (for example neural-radar), relative to the workspace root. Writers in it then run in parallel git worktrees of that repository. On tickets[] entries it defaults to the item's repo. Leave it out when the workspace root is the repository"
 												},
 												"after": {
 													"type": "array",
@@ -480,6 +510,19 @@
 						"scope": {
 							"type": "string",
 							"description": "accept: one sentence naming the work the mandate allows; defaults to the title"
+						},
+						"check": {
+							"type": "string",
+							"enum": [
+								"full",
+								"proof",
+								"none"
+							],
+							"description": "accept: how the work of a code, debug, test or docs ticket is checked before it is merged. full: a test worker writes acceptance tests from the request while the worker implements, then a proof worker on another model runs them and checks that the change fits the request and the codebase, and sends defects back until it passes. proof: the proof only. none: no check, for a trivial change (a label, a constant, a one-line fix). Default: full for code and debug, proof for test, none for docs"
+						},
+						"repo": {
+							"type": "string",
+							"description": "accept: optional, the project folder the ticket changes when it is its own git repository inside a workspace that holds several (for example neural-radar), relative to the workspace root. Writers in it then run in parallel git worktrees of that repository. On tickets[] entries it defaults to the item's repo. Leave it out when the workspace root is the repository"
 						}
 					},
 					"required": [
@@ -573,6 +616,10 @@
 							"type": "string",
 							"description": "report: the failure text"
 						},
+						"failures": {
+							"type": "string",
+							"description": "report: every `Model … failed (…)` line of the Task result, verbatim, also when the worker then returned; a rate-limited account then gets no new launch for a while"
+						},
 						"text": {
 							"type": "string",
 							"description": "report: the sub-agent's reply, used only when it wrote no report file. note: one fact from other work, at most 100 words"
@@ -610,6 +657,13 @@
 				"title": "Concurrent workers",
 				"description": "Worker turns running at once (1–8); one extra slot is kept for your messages.",
 				"type": "number",
+				"default": 6
+			},
+			{
+				"key": "proofRounds",
+				"title": "Proof rounds",
+				"description": "Checked code and debug tickets get acceptance tests written in parallel and a proof by another model, which sends defects back to the worker until the work passes. This is how many proof rounds may fail before you decide (0–6); 0 turns checks off.",
+				"type": "number",
 				"default": 3
 			},
 			{
@@ -629,14 +683,14 @@
 			{
 				"key": "isolation",
 				"title": "Isolation of workers that change files",
-				"description": "auto: each code or docs worker works in its own git worktree once a worker confirms git, and a merge worker lands the branches in your checkout; one at a time before that or without git. worktree: worktrees from the start. serial: one at a time in your checkout.",
+				"description": "auto: each code or docs worker works in its own git worktree once git is found in the workspace or the ticket's repo folder, and a merge worker lands the branches in your checkout; one at a time before that or without git. worktree: worktrees from the start. serial: one at a time in your checkout.",
 				"type": "string",
 				"default": "auto"
 			},
 			{
 				"key": "roleModels",
 				"title": "Role models",
-				"description": "Models pinned per task type, { type: [model, fallback, …] }. Types: code, debug, test, research, analysis, review, docs. Empty means picked automatically from your list.",
+				"description": "Models pinned per task type, { type: [model, fallback, …] }. Types: code, debug, test, research, analysis, review, docs, and the internal merge, spec (acceptance tests) and proof. Empty means picked automatically from your list.",
 				"type": "json",
 				"default": {}
 			},
