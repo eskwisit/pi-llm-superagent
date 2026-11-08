@@ -99,11 +99,54 @@ Workers that change files (`code`, `debug`, `test`, `docs`) never share a checko
 3. You get one result message for the merge. The changes stay uncommitted in your working tree
    unless your request or the Delivery requirements ask for a commit. Nothing is pushed.
 
-Until a worker confirms that the workspace is a git repository, and always in a workspace without
-git, workers that change files run one at a time in your checkout. Read-only workers (`research`,
+The plugin looks for `.git` in the workspace root, or in the ticket's `repo` folder, and runs
+writers in parallel as soon as it finds one. When the workspace holds several projects that are
+each their own git repository (for example `~/Code/pi/neural-radar`), the orchestrator sets `repo`
+on the ticket: the worktrees, branches and merge then belong to that repository, and writers in
+different project folders never wait for each other. Without git found, workers that change files
+run one at a time in that checkout until a worker confirms git. Read-only workers (`research`,
 `analysis`, `review`) always run in parallel; a review can read a ticket's branch before it is
 merged. Set `isolation` to `worktree` to use worktrees from the first ticket, or to `serial` to
 never use them.
+
+## Checked work: acceptance tests, proof, fixes
+
+Workers that change code are checked before their work reaches you, as a small team per request:
+
+```
+spec (acceptance tests) ─┐
+worker(s) ───────────────┴─► proof ─fail─► defects back to their worker ─► proof … ─pass─► merge
+```
+
+- A **test worker** writes an acceptance checklist and tests from your request alone, while the
+  workers implement it. It never sees their code, so its tests catch what they missed.
+- When all of them are ready, a **proof worker** on another model family combines their branches in
+  a scratch worktree. It runs the acceptance tests and the project's own checks (**quality**). It
+  also reads the diffs for **coherence**: the change does what you asked and nothing else, follows
+  the code around it, the parts fit together, and nothing is left behind (debug output, stubs,
+  skipped tests).
+- Each defect goes back to the worker that owns it as a fix turn. A wrong acceptance test goes back
+  to the test worker. The proof runs again on the fixed work.
+- When the proof passes, the branches (with the tests) go to the merge. After `proofRounds` failed
+  rounds (default 3), the branches stay unmerged and you decide.
+
+To keep the token cost small, the test worker runs on a cheap model at low thinking, and the
+tickets of one message share one test worker and one proof. The orchestrator sets `check` per
+ticket: `full` (default for code and debug), `proof` (default for tests), or `none` for trivial
+changes and docs. `proofRounds: 0` turns checks off.
+
+## Model limits
+
+A rate limit or quota holds for a whole provider account, so the plugin handles it once for all
+tickets:
+
+- The worker definitions carry `fallbackModels`: one model per other account, best first. When a
+  worker hits a limit, PI-Desktop moves it to the next one in the same session, with its work so
+  far. PI-Desktop first retries the limited model, which can take a few minutes.
+- When a worker fails on a limit, or the host reports that it moved away from a limited model,
+  the plugin cools that account for 15 minutes. No ticket starts on it during that time: every
+  launch goes to the ticket's next model on a healthy account at once. A context-window limit
+  only moves that one ticket.
 
 ## Usage
 
@@ -125,7 +168,8 @@ sentence, and launches the code worker on your strongest coding model. Then:
 | Key | Default | Meaning |
 |---|---|---|
 | `policy` | observe; rules copy and visual; allowed `person` | accept mode, rules, allowed senders, admission |
-| `maxWorkers` | `3` | worker turns at once, plus one slot for you |
+| `maxWorkers` | `6` | worker turns at once, plus one slot for you |
+| `proofRounds` | `3` | failed proof rounds before you decide; `0` turns checks off |
 | `evalTimeoutSeconds` | `120` | how long a candidate waits for a decision |
 | `paused` | `false` | record messages but evaluate, launch and send nothing |
 | `isolation` | `auto` | `auto`, `worktree` or `serial`: how workers that change files avoid collisions |
