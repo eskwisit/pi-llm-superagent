@@ -1322,14 +1322,27 @@ function restartAssignment(state, t, recovery, reason) {
 const personaSource = () => path.join(__dirname, "subagents");
 const personaTarget = () => path.join(os.homedir(), ".agents", "subagents");
 
-function installPersonas() {
-  const src = personaSource();
+const THINKING_LINE = /^thinkingLevel:[ \t]*(\S+)[ \t]*$/m;
+
+/**
+ * The persona text to install. The Task tool takes no thinking level, so the sub-agent runs at the
+ * thinkingLevel of its definition: step it down past the levels in excludeThinking.
+ */
+function personaBody(name, exclude = DEFAULT_EXCLUDE_THINKING) {
+  const text = fs.readFileSync(path.join(personaSource(), name), "utf8");
+  return text.replace(THINKING_LINE, (line, level) => (THINKING.includes(level) ? `thinkingLevel: ${allowedThinking(level, exclude)}` : line));
+}
+
+/** A persona without its thinking level, to tell an untouched installed copy from an edited one. */
+const withoutThinking = (text) => String(text).replace(THINKING_LINE, "");
+
+function installPersonas(exclude = DEFAULT_EXCLUDE_THINKING) {
   const dst = personaTarget();
   const wanted = new Set(AGENTS.map((a) => `${a}.md`));
   fs.mkdirSync(dst, { recursive: true });
   const changed = [];
   for (const name of wanted) {
-    const body = fs.readFileSync(path.join(src, name));
+    const body = Buffer.from(personaBody(name, exclude), "utf8");
     const target = path.join(dst, name);
     let current = null;
     try {
@@ -1353,12 +1366,24 @@ function installPersonas() {
   return changed;
 }
 
-/** Remove the personas this plugin installed, unless the user edited them. */
+/** Install the personas with the thinking levels the settings allow, and record the outcome. */
+function syncPersonas(exclude) {
+  try {
+    const changed = installPersonas(exclude);
+    if (changed.length) personaStatus = `installed or updated: ${changed.join(", ")}`;
+    else if (!/^installed/.test(personaStatus)) personaStatus = "installed and up to date";
+  } catch (e) {
+    personaStatus = `could not install to ${personaTarget()}: ${e && e.message}`;
+  }
+}
+
+/** Remove the personas this plugin installed, unless the user edited them (a thinking level we wrote does not count). */
 function removePersonas() {
   for (const a of AGENTS) {
     const name = `${a}.md`;
     try {
-      if (fs.readFileSync(path.join(personaTarget(), name)).equals(fs.readFileSync(path.join(personaSource(), name)))) {
+      const installed = fs.readFileSync(path.join(personaTarget(), name), "utf8");
+      if (withoutThinking(installed) === withoutThinking(fs.readFileSync(path.join(personaSource(), name), "utf8"))) {
         fs.rmSync(path.join(personaTarget(), name), { force: true });
       }
     } catch {
@@ -1648,6 +1673,8 @@ async function superConfig(args) {
     await pi.plugin.setSettings(patch);
   }
   const cfg = await settings();
+  // the installed worker definitions carry the thinking level; keep them in line with excludeThinking
+  syncPersonas(cfg.excludeThinking);
   const catalog = await loadCatalog();
   const ctx = routingContext(catalog.entries, cfg);
   return withState(async (state, _cfg, out) => {
@@ -2367,12 +2394,13 @@ const TOOLS = [
 ];
 
 async function onLoad() {
+  let exclude = DEFAULT_EXCLUDE_THINKING;
   try {
-    const changed = installPersonas();
-    personaStatus = changed.length ? `installed or updated: ${changed.join(", ")}` : "installed and up to date";
-  } catch (e) {
-    personaStatus = `could not install to ${personaTarget()}: ${e && e.message}`;
+    exclude = (await settings()).excludeThinking;
+  } catch {
+    // settings unreadable: install with the default exclusions
   }
+  syncPersonas(exclude);
   for (const tool of TOOLS) {
     await pi.agent.registerTool({
       name: tool.name,
