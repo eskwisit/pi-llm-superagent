@@ -186,7 +186,9 @@ For every `launch` item, call `Task`. Put **all** items in one message, so they 
 - `task`: the item's `task`, verbatim;
 - `description`: `<ticket> #<turn>`.
 
-`thinking` is the suggested reasoning level. Pass it only if your `Task` tool takes one. It never is a level in the `excludeThinking` setting (default `high`, `xhigh`, `max`). Do not raise it above the suggested level.
+`thinking` is the suggested reasoning level, for information. Pass it only if your `Task` tool
+takes one, and never raise it. Otherwise the worker runs at the level of its sub-agent definition,
+which the plugin keeps out of the `excludeThinking` setting (default `high`, `xhigh`, `max`).
 
 Keep a map from `<ticket>#<turn>` to its `delegationId` and `attempt`, because you need them
 for `stopAgents` and for reporting.
