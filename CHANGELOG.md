@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.0
+
+### Features
+
+- **main:** run writers in parallel per repo, fail over on limits, prove work (`35f050b`)
+- **subagents:** let the review worker build a proof's scratch worktree (`cd7d84e`)
+
+### Documentation
+
+- **skills:** explain repo, limit failover and checked tickets (`5319ed8`)
+- **readme:** describe repo folders, model limits and checked work (`6c29cbf`)
+
+### Tests
+
+- **tests:** turn proof checks off by default in the test host (`bc005df`)
+- **tests:** cover git probing and per-repo worktrees and merges (`ff0f179`)
+- **tests:** cover the shared limit cooldown and worker fallbacks (`c45b51b`)
+- **tests:** cover acceptance tests, proofs and fix rounds (`ca89fb9`)
+
 ## 0.10.0
 
 ### Features
