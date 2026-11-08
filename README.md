@@ -81,6 +81,12 @@ one ticket per part and one ticket for the step. The step waits (`after`) until 
 with their branches merged first if they change files. Its brief then points to their reports. A
 chain where each step needs the one before it stays one ticket.
 
+A broad request ("ignore AI cost references throughout the project") starts one ticket, because
+the orchestrator never reads code. On its first turn, the worker checks how far the request
+reaches. When it finds independent parts (for example the API and the web app), it changes
+nothing and splits the ticket: one new ticket per part, in parallel, under the same request,
+with an optional step that waits for them (`after`).
+
 Workers that change files (`code`, `debug`, `test`, `docs`) never share a checkout:
 
 1. Each worker makes its own git worktree, `.superagent/worktrees/<ticket>`, on a local branch
