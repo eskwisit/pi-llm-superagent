@@ -24,6 +24,7 @@ explicit  ─► superagent_route        accept | attach | stop | ignore
 inferred  ─► superagent_eval_decide  judge every enabled rule; accepted only in auto mode
 accepted  ─► Task(worker, model) per `launch` item ─► superagent_ticket report ─► handoff
 writers   ─► own git worktree each ─► ready branch ─► merge ticket lands it ─► handoff
+checked   ─► spec (tests) ∥ worker ─► proof ─fail─► fix turn ─► proof … ─pass─► merge
 ```
 
 ## Tools
@@ -87,7 +88,7 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
 
 | kind | When |
 |---|---|
-| `accept` | New work. Required: `title`, `name`, `type`, `acknowledgement`. Optional: `note`, `scope`, `requirements`. For several requests in one message, or parallel parts with a step that needs their results: `tickets` (see below), each entry with an optional `after`, and one `acknowledgement`. |
+| `accept` | New work. Required: `title`, `name`, `type`, `acknowledgement`. Optional: `note`, `scope`, `requirements`, `repo`. For several requests in one message, or parallel parts with a step that needs their results: `tickets` (see below), each entry with an optional `after`, and one `acknowledgement`. |
 | `attach` | The message points explicitly at one ticket: it names it, quotes its result or question, or plainly continues the change just made, and exactly one ticket fits. |
 | `stop` | The person asks to stop a ticket. Afterwards, the rest of the message may still be accepted as new work. |
 | `ignore` | Ordinary discussion, thanks, a quick question you answered. Give a reason. |
@@ -124,6 +125,12 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
   The parts run in parallel. The step starts when they ended (a writer's branch is merged first),
   and its brief points to their reports. Split like this only when at least two parts can run in
   parallel. A chain where each step needs the one before it stays one ticket.
+- **Work in a project folder that is its own git repository** (the workspace holds several
+  projects, such as `~/Code/pi` with `neural-radar/`, `mumble/`, …): set `repo` to that folder,
+  relative to the workspace root (`repo: "neural-radar"`; on the item, it covers every entry of
+  `tickets`). Writers then run in parallel git worktrees of that repository, and one merge worker
+  per repository lands them. Without `repo`, writers in a workspace root that is not a git
+  repository run one at a time.
 - **A request that needs a decision first:** if the request leaves open a choice only the person
   can make (an unsettled design, a choice between products), ask that single question instead of
   accepting a guess.
@@ -150,6 +157,23 @@ Set `requirements` only when the request or its context calls for them:
 | `reasoning: true` | Subtle logic, maths, concurrency, root-cause hunting |
 | `differentFrom: ["<ticket>"]` | A `review` of a ticket's work, so another model family checks it |
 | `prefer` / `avoid` | The person asked for or against a model or vendor |
+
+### Checks: `check` on code, debug, test and docs tickets
+
+The tools check writer work before it reaches the person, and keep the cost low on their own (a
+cheap test worker, one proof per request on another model family):
+
+| `check` | When | What runs |
+|---|---|---|
+| `full` (default for `code`, `debug`) | A real change: behaviour, logic, an API, a fix | A test worker writes acceptance tests from the request **while** the worker implements. Then a proof worker runs them and checks coherence. |
+| `proof` (default for `test`) | A small change that still needs a second look | Only the proof. |
+| `none` (default for `docs`) | Trivial: a label, a constant, a one-line fix, wording | No check. |
+
+Set `check: "none"` for trivial changes, so they cost nothing extra. The tickets of one message share
+one test worker and one proof, which also checks that the parts fit together. Defects go back to
+their worker as a fix turn, and a wrong acceptance test goes back to the test worker, until the
+proof passes or `proofRounds` (default 3) runs fail. You launch what comes back and say nothing;
+the person hears the result after the merge.
 
 Role models pinned with `roleModels` override the scoring. Set them only when the person asks.
 `superagent_models` previews a choice, and `explain: true` shows the scores. Each accept returns
@@ -202,8 +226,10 @@ checkout. Each one works in its own git worktree on branch `superagent/<ticket>`
 field of a launch item shows where. A ready branch waits for a **merge ticket** (`merge`, `merge-2`,
 …; type `merge`), which the tools start on their own. It lands the branches in the person's checkout, one
 merge at a time, and waits for the other tickets of the same message. Launch it like any other
-item. Until a worker confirms that the workspace is a git repository, and in a workspace without
-git, writers run one at a time; their turns wait in `queued`.
+item. The tools look for `.git` in the ticket's `repo` folder (or the workspace root) and, when
+found, run writers in parallel at once. Without a `.git` there, writers run one at a time until a
+worker confirms git, and always without git; their turns wait in `queued`. Writers in different
+`repo` folders never wait for each other.
 
 ## 5. When a worker returns: `superagent_ticket report`
 
@@ -212,15 +238,21 @@ Pass `{ action: "report", ticket, turn, attempt }` (from the launch item) and on
   written;
 - `outcome: "error"`, plus `error` (the failure text, e.g. a timeout or a limit).
 
+Always add `failures`: every `Model … failed (…)` line of the Task result, verbatim. The host
+writes one when a model failed and it moved the worker to a fallback model, so such a line can
+come with a worker that returned normally.
+
 The tool retries passing failures, and **fails over to the ticket's next model when a limit is
-hit**. Launch whatever comes back in `launch`. Then act on `handoff`:
+hit**. A rate limit holds for the whole provider account. The tool then cools that account for
+15 minutes: no ticket starts on it, and every launch goes to a healthy model at once. The
+`warnings` say so. Launch whatever comes back in `launch`. Then act on `handoff`:
 
 | handoff.kind | Do |
 |---|---|
 | `result` | Write one or two sentences: the outcome the person can use now, and where it is. Clear it with `superagent_reply` `purpose: "result"` and post the returned text. Never forward the report, or shrink it point by point. A merge result carries `merged`: the tickets it landed. Write one message that covers all of them, on the merge ticket. |
 | `question` | `superagent_reply` `purpose: "attention"` with `question` copied **exactly**. Ask the person that one question; use `asktool` when it has clear options. |
-| `blocker` / `failure` | No structured question, so the ticket shows under `needsPerson`. At the end of your turn, tell the person in one sentence: the concrete obstacle and the smallest action that would remove it, or plainly that it cannot be done. Offer `retry`, on another model if useful. |
-| `none` | Say nothing. Progress stays internal. A worker that split its ticket also returns `none`, with `split` listing the new tickets; launch them. A writer's ready branch that waits for its merge also returns `none`: the person hears the result after the merge. |
+| `blocker` / `failure` | No structured question, so the ticket shows under `needsPerson`. A proof that still fails after its last round is a `blocker`: name the main defect, and offer to merge anyway (`superagent_ticket merge`) or to retry. At the end of your turn, tell the person in one sentence: the concrete obstacle and the smallest action that would remove it, or plainly that it cannot be done. Offer `retry`, on another model if useful. |
+| `none` | Say nothing. Progress stays internal. Checked work that waits for its proof, a failed proof round and its fix turns also return `none`: launch what comes back. A worker that split its ticket also returns `none`, with `split` listing the new tickets; launch them. A writer's ready branch that waits for its merge also returns `none`: the person hears the result after the merge. |
 
 `handbacks` and new `candidates` are new triggers to decide. When the response carries
 `answer`, the worker answered a question the person asked. Send that answer with
