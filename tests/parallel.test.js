@@ -424,3 +424,92 @@ describe("a worker splits a broad ticket into parallel tickets", () => {
     assert.deepEqual(Object.values(env.state().tickets).filter((t) => t.parent), [], "no part started");
   });
 });
+
+describe("git found by the plugin, and project folders that are their own repositories", () => {
+  const RADAR = {
+    kind: "accept", acknowledgement: "On it: two radar changes.", repo: "radar",
+    tickets: [
+      { title: "Activity text", name: "activity", type: "code", scope: "show chat text in the activity list" },
+      { title: "No pills", name: "pills", type: "code", scope: "remove the help pills" },
+    ],
+  };
+
+  it("auto: a .git in the workspace root lets writers run in parallel from the start", async () => {
+    const env = await setup();
+    put(env.dirs, ".git/HEAD", "ref: refs/heads/main\n");
+    const { out } = await accept(env, "two things", SPLIT);
+    assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["dark-toggle", "rename-save"]);
+    assert.equal(env.state().vcs, "git");
+  });
+
+  it("auto: a found repository wins over an earlier none", async () => {
+    const env = await setup();
+    await accept(env, "first", one("first"));
+    env.report("first", 1, ready("isolation: none"));
+    await env.call("ticket", { action: "report", ticket: "first", turn: 1 });
+    assert.equal(env.state().vcs, "none");
+    put(env.dirs, ".git", "gitdir: /elsewhere/.git/worktrees/x\n");
+    const { out } = await accept(env, "two things", SPLIT);
+    assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["dark-toggle", "rename-save"]);
+    assert.equal(env.state().vcs, "git");
+  });
+
+  it("repo: writers of a project folder with git run in parallel worktrees of that repository", async () => {
+    const env = await setup();
+    put(env.dirs, "radar/.git/HEAD", "ref: refs/heads/main\n");
+    const { r, out } = await accept(env, "radar: activity text and no pills", RADAR);
+    assert.equal(r.ok, true, r.error);
+    assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["activity", "pills"]);
+    assert.equal(out.launch.find((x) => x.ticket === "pills").worktree, "radar/.superagent/worktrees/pills");
+    const s = env.state();
+    assert.equal(s.tickets.pills.repo, "radar");
+    assert.deepEqual(s.repos, { radar: "git" });
+    assert.equal(s.vcs, undefined, "the workspace root stays unknown");
+    const b = env.brief("pills", 1);
+    assert.match(b, /- repository: `radar\/`/);
+    assert.match(b, /cd radar\n {3}git rev-parse --is-inside-work-tree/);
+    assert.match(b, /git worktree add -b superagent\/pills \.superagent\/worktrees\/pills refs\/superagent\/base\/pills/);
+  });
+
+  it("repo: one merge per repository, run from that repository", async () => {
+    const env = await setup({ isolation: "worktree" });
+    await accept(env, "a", { ...one("a"), repo: "app-a" });
+    await accept(env, "b", { ...one("b"), repo: "app-b" });
+    env.report("a", 1, ready());
+    const ra = await env.call("ticket", { action: "report", ticket: "a", turn: 1 });
+    assert.equal(ra.launch[0].ticket, "merge");
+    env.report("b", 1, ready());
+    const rb = await env.call("ticket", { action: "report", ticket: "b", turn: 1 });
+    assert.equal(rb.launch[0].ticket, "merge-2", "the merge of app-a does not hold app-b");
+    const s = env.state();
+    assert.equal(s.tickets.merge.repo, "app-a");
+    assert.deepEqual(s.tickets["merge-2"].merges, ["b"]);
+    const mb = env.brief("merge-2", 1);
+    assert.match(mb, /the git repository `app-b\/`/);
+    assert.match(mb, /From the repository folder `app-b\/` \(`cd app-b` from the workspace root\)/);
+    assert.match(mb, /- worktree: `\.superagent\/worktrees\/b` \(relative to the repository folder; `app-b\/\.superagent\/worktrees\/b` from the workspace root\)/);
+  });
+
+  it("without git, writers in different folders run side by side; the same folder or the root waits", async () => {
+    const env = await setup({ isolation: "serial" });
+    const a = await accept(env, "a", { ...one("a"), repo: "app-a" });
+    assert.equal(a.out.launch[0].ticket, "a");
+    assert.match(env.brief("a", 1), /main checkout of the project folder `app-a\/`/);
+    const b = await accept(env, "b", { ...one("b"), repo: "app-b" });
+    assert.equal(b.out.launch[0].ticket, "b", "another folder: no collision");
+    const c = await accept(env, "c", { ...one("c"), repo: "app-a/sub" });
+    assert.equal(c.out.launch, undefined, "inside app-a: waits");
+    const d = await accept(env, "d", one("d"));
+    assert.equal(d.out.launch, undefined, "the workspace root holds every folder: waits");
+  });
+
+  it("refuses a repo outside the workspace", async () => {
+    const env = await setup();
+    for (const repo of ["../other", "/Users/x/radar", "a/../b"]) {
+      const { r } = await accept(env, `msg ${repo}`, { ...one("x"), repo });
+      assert.equal(r.ok, false, repo);
+      assert.match(r.error, /repo must be a folder relative to the workspace root/);
+    }
+    assert.deepEqual(Object.keys(env.state().tickets), []);
+  });
+});
