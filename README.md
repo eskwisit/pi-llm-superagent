@@ -65,7 +65,10 @@ no model is enabled for sub-agents, workers run on the session model.
 
 Workers get at most `medium` thinking by default. The `excludeThinking` setting lists the
 levels never used (default `high`, `xhigh`, `max`). A higher wanted level goes down to the
-next allowed one. Set it to `[]` to allow all levels.
+next allowed one. Set it to `[]` to allow all levels. A worker runs at the `thinkingLevel` of
+its sub-agent definition, so the plugin writes the allowed level into the installed
+`superagent-worker-*` files in `~/.agents/subagents` on load and after each settings change.
+A changed level applies to new sessions.
 
 ## Parallel tickets without collisions
 
