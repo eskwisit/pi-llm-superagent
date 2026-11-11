@@ -220,6 +220,10 @@ function inferProfile(id, desc = "") {
   const family = familyOf(id);
   const sizeM = toks.map((x) => /^(\d+(?:\.\d+)?)b$/.exec(x)).find(Boolean);
   const size = sizeM ? parseFloat(sizeM[1]) : null;
+  // host metadata in the description: "reasoning" and "thinking: low/medium/high/xhigh/max"
+  const levels = /thinking\s*:\s*([a-z/ ,]+)/.exec(d);
+  const thinking = levels ? THINKING.filter((l) => levels[1].split(/[\s/,]+/).includes(l)) : [];
+  const deepThinker = thinking.includes("xhigh") || thinking.includes("max");
 
   let tier = "mid";
   if (has("nano", "lite", "tiny", "micro") || (size !== null && size <= 4)) tier = "tiny";
@@ -250,8 +254,9 @@ function inferProfile(id, desc = "") {
     p.reasoning = clamp(p.reasoning + 1);
     if (has("reasoner", "r1", "thinking")) p.speed = clamp(p.speed - 1);
   }
-  const levels = /thinking\s*:\s*([a-z/ ,]+)/.exec(d);
-  if (levels) p.thinking = THINKING.filter((l) => levels[1].split(/[\s/,]+/).includes(l));
+  p.thinking = thinking;
+  // a model the host lets think at xhigh/max reasons deeply, whatever its name says
+  if (deepThinker) { p.reasoningModel = true; p.reasoning = clamp(p.reasoning + 1); }
   if (has("preview", "exp", "experimental", "beta", "free") || /\bfree\b|preview|rate.?limit/.test(d)) p.unstable = true;
 
   const nums = toks.filter((x) => /^\d/.test(x) && !/^\d+(\.\d+)?[bkm]$/.test(x)).map((x) => parseInt(x, 10));
@@ -531,7 +536,7 @@ async function loadCatalog() {
   const listed = models.filter((m) => isObj(m) && m.availableForSubagents === true && str(m.key || (m.providerId && `${m.providerId}/${m.modelId}`)));
   const entries = parseCatalog(listed.map((m) => ({
     id: str(m.key) || `${m.providerId}/${m.modelId}`,
-    description: [m.providerName, m.alias, m.supportsReasoning ? "reasoning" : "", Array.isArray(m.thinkingLevels) && m.thinkingLevels.length ? `thinking: ${m.thinkingLevels.join("/")}` : ""].filter(Boolean).join(", "),
+    description: [m.providerName, m.label, m.alias, m.supportsReasoning ? "reasoning" : "", Array.isArray(m.thinkingLevels) && m.thinkingLevels.length ? `thinking: ${m.thinkingLevels.join("/")}` : ""].filter(Boolean).join(", "),
   })));
   const note = entries.length ? null : models.length
     ? "none of your models is enabled for sub-agents (Settings > Models); workers run on the session model"
