@@ -108,16 +108,20 @@ one item per `trigger_id`. Each item succeeds or fails on its own.
   thing and the intended result, e.g. "On it: renaming the settings button from 'Save changes'
   to 'Save'." Never write a generic "I'll handle it". Post the returned `post` text **once**, as
   your reply to the message.
-- **One request, one ticket.** Never split a sequence of steps into tickets; the worker does that.
-  A broad request ("throughout the project", "everywhere") also stays one ticket: you cannot see
-  its parts without reading code. On its first turn, its worker splits it into parallel tickets
-  when it finds independent parts. The report response then carries `split` and the parts arrive
-  in `launch`: launch them, and say nothing.
-- **Several separate requests in one message: one ticket each, in one accept.** Put them in
-  `tickets`, one entry per request, each with `title`, `name`, `type`, `scope` and, if needed,
+- **One request, one ticket, unless the message itself names the parts.** Never split a
+  sequence of steps into tickets; the worker does that. A broad request ("throughout the
+  project", "everywhere") whose parts you cannot see without reading code stays one ticket. On
+  its first turn, its worker splits it into parallel tickets when it finds independent parts
+  (one per type of task, each with its own requirements), and a part may split once more. The
+  report response then carries `split` and the parts arrive in `launch`: launch them, and say
+  nothing. All parts of one request are merged together, after the last of them is ready.
+- **The message names several parts or requests: one ticket each, in one accept.** This covers
+  separate requests ("rename X, and add Y") as well as one change whose parts the person
+  spelled out ("the API, the web app and the docs", "the code and its tests"). Put them in
+  `tickets`, one entry per part, each with `title`, `name`, `type`, `scope` and, if needed,
   `note` and `requirements`. `scope` is one sentence that names the part of the message the
-  ticket owns. The tickets run in parallel, and each worker knows its siblings. Write one
-  `acknowledgement` that names all of them.
+  ticket owns. The tickets run in parallel, each on the worker and model of its type, and each
+  worker knows its siblings. Write one `acknowledgement` that names all of them.
 - **Parallel parts, then a step that needs their results (fan-out, fan-in):** one ticket per
   part, and one ticket for the step. Give that ticket `after`: the `name`s of the entries whose
   results it needs. Example: "run task X with tool A and with tool B, then compare output and
