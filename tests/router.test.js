@@ -76,6 +76,18 @@ describe("the user's model list", () => {
     assert.equal(t.inferProfile("x/model-preview").unstable, true);
     assert.equal(t.familyOf("acme/zeta-2"), "zeta");
   });
+
+  it("reads the host's thinking levels: a model that may think at xhigh or max is a deep reasoner, whatever its name", async () => {
+    const pi = fakePi(sandbox());
+    const t = loadMain(pi).__t;
+    const fable = t.inferProfile("anthropic/claude-fable-5-2", "Anthropic, Claude Fable, reasoning, thinking: low/medium/high/xhigh");
+    assert.equal(fable.reasoningModel, true);
+    assert.equal(fable.reasoning, 5);
+    assert.deepEqual(fable.thinking, ["low", "medium", "high", "xhigh"]);
+    assert.equal(t.inferProfile("anthropic/claude-fable-5-2").reasoning, 4, "without metadata the name alone says nothing");
+    assert.equal(t.inferProfile("x/zeta-2", "reasoning, thinking: low/medium/high").reasoning, 5, "reasoning in the metadata already counts once");
+    assert.equal(t.inferProfile("x/zeta-2", "thinking: low/max").reasoning, 5);
+  });
 });
 
 describe("routing by type and requirements", () => {
