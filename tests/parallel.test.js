@@ -382,7 +382,7 @@ describe("a worker splits a broad ticket into parallel tickets", () => {
     assert.equal(r.ok, true, r.error);
     const b = env.brief("ignore-ai-cost", 1);
     assert.match(b, /## Parallel parts/);
-    assert.match(b, /split: <name \(type\): scope/);
+    assert.match(b, /split: <name \(type\[, key=value…\]\): scope/);
     env.report("ignore-ai-cost", 1, SPLIT_REPORT);
     const out = await env.call("ticket", { action: "report", ticket: "ignore-ai-cost", turn: 1 });
     assert.deepEqual(out.split, ["ignore-ai-cost-api", "ignore-ai-cost-web", "ignore-ai-cost-check"]);
@@ -402,7 +402,47 @@ describe("a worker splits a broad ticket into parallel tickets", () => {
     const pb = env.brief("ignore-ai-cost-api", 1);
     assert.match(pb, /The worker of ticket ignore-ai-cost found independent parts/);
     assert.match(pb, /> ignore any AI cost reference/, "each part reads the whole message");
-    assert.doesNotMatch(pb, /## Parallel parts/, "a part never splits again");
+    assert.match(pb, /## Parallel parts/, "a part may split once more");
+    assert.match(pb, /already a part of a split/);
+  });
+
+  it("a part splits once more with its own requirements per part; the parts join the request's group, and a grandchild never splits", async () => {
+    const env = await setup({ isolation: "worktree" });
+    await accept(env, "ignore any AI cost reference throughout the project", { ...one("ignore-ai-cost"), requirements: { quality: "high" } });
+    env.report("ignore-ai-cost", 1, SPLIT_REPORT);
+    await env.call("ticket", { action: "report", ticket: "ignore-ai-cost", turn: 1 });
+    env.report("ignore-ai-cost-web", 1, [
+      "state: dropped", "summary: web splits", "human_action: none",
+      "split: ui (code, reasoning=true): the React components; copy (docs, quality=low, speed=high): the help texts of apps/web",
+      "---", "two independent parts",
+    ].join("\n"));
+    const out = await env.call("ticket", { action: "report", ticket: "ignore-ai-cost-web", turn: 1 });
+    assert.deepEqual(out.split, ["ignore-ai-cost-web-ui", "ignore-ai-cost-web-copy"], JSON.stringify(out));
+    const s = env.state();
+    const ui = s.tickets["ignore-ai-cost-web-ui"];
+    const copy = s.tickets["ignore-ai-cost-web-copy"];
+    assert.equal(ui.parent, "ignore-ai-cost-web");
+    assert.deepEqual(ui.req.quality, "high", "the person's requirement stays");
+    assert.equal(ui.req.reasoning, true);
+    assert.equal(copy.type, "docs");
+    assert.equal(copy.req.quality, "low", "a part overrides");
+    assert.equal(copy.req.speed, "high");
+    assert.deepEqual(ui.siblings.sort(), ["ignore-ai-cost-api", "ignore-ai-cost-check", "ignore-ai-cost-web-copy"], "the parts join the request's other tickets");
+    assert.deepEqual(s.tickets["ignore-ai-cost-api"].siblings.sort(), ["ignore-ai-cost-check", "ignore-ai-cost-web-copy", "ignore-ai-cost-web-ui"], "the uncle sees the parts in place of the split ticket");
+    assert.doesNotMatch(env.brief("ignore-ai-cost-web-ui", 1), /## Parallel parts/, "two levels at most");
+    env.report("ignore-ai-cost-web-ui", 1, "state: dropped\nsummary: x\nhuman_action: none\nsplit: a (code): one; b (code): two\n---\n.");
+    const deep = await env.call("ticket", { action: "report", ticket: "ignore-ai-cost-web-ui", turn: 1 });
+    assert.equal(deep.split, undefined);
+    assert.match(deep.warnings.join("\n"), /split ignored/);
+  });
+
+  it("ignores a split with a flag it cannot read", async () => {
+    const env = await setup();
+    await accept(env, "do it", one("thing"));
+    env.report("thing", 1, "state: dropped\nsummary: x\nhuman_action: none\nsplit: a (code, quality=huge): one; b (code): two\n---\n.");
+    const out = await env.call("ticket", { action: "report", ticket: "thing", turn: 1 });
+    assert.equal(out.split, undefined);
+    assert.match(out.warnings.join("\n"), /split ignored \(a: requirements.quality must be one of/);
   });
 
   it("ignores a split that is not usable, and handles the report as usual", async () => {
