@@ -85,7 +85,10 @@ A broad request ("ignore AI cost references throughout the project") starts one 
 the orchestrator never reads code. On its first turn, the worker checks how far the request
 reaches. When it finds independent parts (for example the API and the web app), it changes
 nothing and splits the ticket: one new ticket per part, in parallel, under the same request,
-with an optional step that waits for them (`after`).
+with an optional step that waits for them (`after`). Each part names its type of task (code,
+test, docs, review, …) and may carry its own requirements (`quality=low`, `speed=high`,
+`reasoning=true`, …), so it gets the worker and model that fit it. A part may split once more;
+all parts of one request are merged together.
 
 Workers that change files (`code`, `debug`, `test`, `docs`) never share a checkout:
 
