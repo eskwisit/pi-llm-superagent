@@ -39,12 +39,12 @@ ticket + mandate ─► assignment ─► turns ─► report ─► handoff (re
 
 | Type | Worker | The router favours |
 |---|---|---|
-| `code`, `debug`, `test` | `worker-code` | coding and reasoning (reasoning first for debug) |
-| `research` | `worker-research` | long context, reasoning, speed |
-| `analysis` | `worker-analysis` | reasoning, context |
-| `review` | `worker-review` | reasoning, coding, and another model family than the work it reviews |
-| `docs` | `worker-docs` | writing |
-| `run` | `worker-code` | speed and low cost: runs tests, builds or linters in the main checkout and reports |
+| `code`, `debug`, `test` | `superagent-code` | coding and reasoning (reasoning first for debug) |
+| `research` | `superagent-research` | long context, reasoning, speed |
+| `analysis` | `superagent-analysis` | reasoning, context |
+| `review` | `superagent-review` | reasoning, coding, and another model family than the work it reviews |
+| `docs` | `superagent-docs` | writing |
+| `run` | `superagent-code` | speed and low cost: runs tests, builds or linters in the main checkout and reports |
 
 The plugin reads your models itself, through `models.list`, and uses only the ones you enabled
 for sub-agents in **Settings > Models**. It infers each model's traits from its id and
@@ -68,8 +68,10 @@ Workers get at most `medium` thinking by default. The `excludeThinking` setting 
 levels never used (default `high`, `xhigh`, `max`). A higher wanted level goes down to the
 next allowed one. Set it to `[]` to allow all levels. A worker runs at the `thinkingLevel` of
 its sub-agent definition, so the plugin writes the allowed level into the installed
-`worker-*` files in `~/.agents/subagents` when the `superagent` gateway tool is first called in a session (so idle sessions pay no tokens for them) and after each settings change.
-A changed level applies to new sessions.
+`superagent-*` files in `~/.agents/subagents` when the `superagent` gateway tool is first called in a session (so idle sessions pay no tokens for them) and after each settings change.
+A changed level applies to new sessions. Copies that older releases installed as `worker-*` or
+`superagent-worker-*` are removed on that first call; an orchestrator session started before the
+update still names the old workers until it restarts.
 
 ## Parallel tickets without collisions
 
