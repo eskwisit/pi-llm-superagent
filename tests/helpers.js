@@ -63,12 +63,13 @@ function fakePi(dirs, { settings = {}, models = [] } = {}) {
     return full;
   };
   const writes = [];
+  const removes = [];
   const tools = new Map();
   const unregistered = [];
   // checks (acceptance tests and proofs) are off unless a test turns them on: most tests are about other things
   const store = { proofRounds: 0, ...settings };
   const pi = {
-    writes, tools, unregistered, store, modelList: models,
+    writes, removes, tools, unregistered, store, modelList: models,
     fs: {
       readText: async (p) => fs.readFileSync(abs(p), "utf8"),
       writeText: async (p, content) => {
@@ -81,6 +82,15 @@ function fakePi(dirs, { settings = {}, models = [] } = {}) {
         path: path.posix.join(p, e.name),
         isDirectory: e.isDirectory(),
       })),
+      // the host trashes one path at a time and refuses a non-empty directory
+      remove: async (p) => {
+        const full = abs(p);
+        if (!fs.existsSync(full)) throw new Error(`NOT_FOUND: path not found: ${p}`);
+        if (fs.statSync(full).isDirectory() && fs.readdirSync(full).length) throw new Error("refusing to remove a non-empty directory");
+        removes.push(p);
+        if (fs.statSync(full).isDirectory()) fs.rmdirSync(full);
+        else fs.rmSync(full, { force: false });
+      },
     },
     plugin: {
       getSettings: async () => JSON.parse(JSON.stringify(store)),

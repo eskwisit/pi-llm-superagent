@@ -146,6 +146,28 @@ describe("accept, launch, report, reply", () => {
     assert.equal(again.reused, true);
   });
 
+  it("with cleanupTickets on, an ended ticket's briefs and reports are removed; off keeps them", async () => {
+    const keep = await setup();
+    await accepted(keep);
+    keep.report("login-timeout", 1, READY);
+    await keep.call("ticket", { action: "report", ticket: "login-timeout", turn: 1 });
+    assert.ok(fs.existsSync(`${keep.dirs.workspace}/.superagent/tickets/login-timeout/turn-1.md`));
+    assert.equal(keep.pi.removes.length, 0);
+
+    const env = await setup({ cleanupTickets: true });
+    await accepted(env);
+    assert.ok(fs.existsSync(`${env.dirs.workspace}/.superagent/tickets/login-timeout/turn-1.md`));
+    env.report("login-timeout", 1, READY);
+    const r = await env.call("ticket", { action: "report", ticket: "login-timeout", turn: 1 });
+    assert.equal(r.stage, "ended/completed");
+    assert.ok(!fs.existsSync(`${env.dirs.workspace}/.superagent/tickets/login-timeout`));
+    assert.deepEqual(env.pi.removes.slice().sort(), [".superagent/tickets/login-timeout", ".superagent/tickets/login-timeout/report-1.md", ".superagent/tickets/login-timeout/turn-1.md"]);
+    assert.ok(env.state().tickets["login-timeout"].cleaned);
+    // the next call does not try again
+    await env.call("intake", { text: "hello" });
+    assert.equal(env.pi.removes.length, 3);
+  });
+
   it("replies are purpose-checked: no result before ready, attention must copy the open question", async () => {
     const env = await setup();
     await accepted(env);
