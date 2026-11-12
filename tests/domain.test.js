@@ -31,6 +31,7 @@ async function setup(settings = {}, models = MODELS) {
   const pi = fakePi(dirs, { settings: { isolation: "serial", ...settings }, models });
   const main = loadMain(pi);
   await main.onLoad();
+  await pi.call("superagent", {});
   const call = (name, args) => pi.call(`superagent_${name}`, args);
   const report = (ticket, n, text) => put(dirs, `.superagent/tickets/${ticket}/report-${n}.md`, text);
   const state = () => JSON.parse(get(dirs, ".superagent/state.json"));
@@ -99,7 +100,7 @@ describe("accept, launch, report, reply", () => {
     const { r, route } = await accepted(env);
     assert.equal(r.ok, true);
     assert.equal(r.ticket, "login-timeout");
-    assert.equal(r.agent, "superagent-worker-code");
+    assert.equal(r.agent, "worker-code");
     assert.ok(["anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "google/gemini-3.8-flash"].includes(r.model), "only models enabled for sub-agents");
     assert.equal(r.post, ACCEPT.acknowledgement);
     assert.equal(route.launch.length, 1);
@@ -117,14 +118,17 @@ describe("accept, launch, report, reply", () => {
     const env = await setup();
     const a = await env.call("intake", { text: "one" });
     const b = await env.call("intake", { text: "two" });
+    const c = await env.call("intake", { text: "three" });
     const out = await env.call("route", {
       decisions: [
         { ...ACCEPT, trigger_id: a.trigger_id, acknowledgement: "" },
         { ...ACCEPT, trigger_id: b.trigger_id, note: "word ".repeat(31) },
+        { ...ACCEPT, trigger_id: c.trigger_id, acknowledgement: "I'll handle it." },
       ],
     });
     assert.match(out.results[0].error, /acknowledgement is required/);
     assert.match(out.results[1].error, /31 words/);
+    assert.match(out.results[2].error, /acknowledgement is generic/);
   });
 
   it("a ready report ends the ticket and the result is cleared once", async () => {
