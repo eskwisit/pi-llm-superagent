@@ -190,8 +190,10 @@ sentence, and launches the code worker on your strongest coding model. Then:
 
 - File access through the host API is limited to `.superagent/**` in the workspace.
 - `models.list` shows the plugin which models you enabled, never any key.
-- Only the `superagent` gateway tool is registered at load. Its first call registers the seven
-  team tools and copies the five worker personas with Node `fs` to `~/.agents/subagents`, which
+- The eight tools are registered at load, so `ToolSearch` finds them in the turn that first
+  needs them (PI-Desktop reads a session's plugin tools when a prompt starts); until activated,
+  each costs one line in the on-demand tool list. The first call of the `superagent` gateway
+  copies the five worker personas with Node `fs` to `~/.agents/subagents`, which
   is where PI-Desktop loads sub-agents from. Unload removes them, unless you edited them.
 - The plugin has no network access and runs no processes. Workers are ordinary PI-Desktop
   sub-agents:
