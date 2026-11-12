@@ -44,6 +44,7 @@ ticket + mandate ─► assignment ─► turns ─► report ─► handoff (re
 | `analysis` | `worker-analysis` | reasoning, context |
 | `review` | `worker-review` | reasoning, coding, and another model family than the work it reviews |
 | `docs` | `worker-docs` | writing |
+| `run` | `worker-code` | speed and low cost: runs tests, builds or linters in the main checkout and reports |
 
 The plugin reads your models itself, through `models.list`, and uses only the ones you enabled
 for sub-agents in **Settings > Models**. It infers each model's traits from its id and
@@ -109,8 +110,9 @@ on the ticket: the worktrees, branches and merge then belong to that repository,
 different project folders never wait for each other. Without git found, workers that change files
 run one at a time in that checkout until a worker confirms git. Read-only workers (`research`,
 `analysis`, `review`) always run in parallel; a review can read a ticket's branch before it is
-merged. Set `isolation` to `worktree` to use worktrees from the first ticket, or to `serial` to
-never use them.
+merged. `run` workers (tests, builds, linters) share the main checkout and run side by side; a
+merge or a worker that changes that checkout waits until they finish, and they wait for it. Set
+`isolation` to `worktree` to use worktrees from the first ticket, or to `serial` to never use them.
 
 ## Checked work: acceptance tests, proof, fixes
 
