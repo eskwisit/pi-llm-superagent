@@ -1,16 +1,11 @@
 # Changelog
 
-## 0.24.0
+## 0.24.1
 
-### Features
+### Fixes
 
-- cleanupTickets setting trashes a ticket's briefs and reports when it ends (`8ef2ac4`)
+- **skills:** pin roleModels only when the person names a model, never to spread load (`4377a07`)
 
 ### Documentation
 
-- **readme:** document the cleanupTickets setting and the delete scope (`11e60c6`)
-- note the host json-settings save bug and the fs.remove limits (`c83f542`)
-
-### Tests
-
-- **tests:** cover ticket cleanup and a trash-like fs.remove in the fake host (`eba630a`)
+- **manifest:** order settings by control type and rewrite the hints in simplified english (`0b31aa4`)
