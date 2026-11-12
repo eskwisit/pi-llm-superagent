@@ -28,6 +28,7 @@ async function setup(settings = {}) {
   const pi = fakePi(dirs, { settings, models: MODELS });
   const main = loadMain(pi);
   await main.onLoad();
+  await pi.call("superagent", {});
   const call = (name, args) => pi.call(`superagent_${name}`, args);
   const report = (ticket, n, text) => put(dirs, `.superagent/tickets/${ticket}/report-${n}.md`, text);
   const state = () => JSON.parse(get(dirs, ".superagent/state.json"));
@@ -169,7 +170,7 @@ describe("merge tickets", () => {
     assert.match(r.note, /queued for the merge worker/);
     assert.equal(r.stage, "working/merge");
     assert.equal(r.launch[0].ticket, "merge");
-    assert.equal(r.launch[0].agent, "superagent-worker-code");
+    assert.equal(r.launch[0].agent, "worker-code");
     const s = env.state();
     assert.equal(s.tickets.merge.type, "merge");
     assert.deepEqual(s.tickets.merge.merges, ["fix"]);
@@ -327,7 +328,7 @@ describe("tickets that need the results of others (after)", () => {
   it("writers: the parts merge first, then the step starts from the merged checkout", async () => {
     const env = await setup({ isolation: "worktree" });
     const W = {
-      kind: "accept", acknowledgement: "On it.",
+      kind: "accept", acknowledgement: "On it: building a and b, then the glue.",
       tickets: [
         { title: "A", name: "part a", type: "code", scope: "part a" },
         { title: "B", name: "part b", type: "code", scope: "part b" },

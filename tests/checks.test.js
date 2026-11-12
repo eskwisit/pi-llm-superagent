@@ -28,6 +28,7 @@ async function setup(settings = {}) {
   const pi = fakePi(dirs, { settings: { isolation: "worktree", proofRounds: 3, ...settings }, models: MODELS });
   const main = loadMain(pi);
   await main.onLoad();
+  await pi.call("superagent", {});
   const call = (name, args) => pi.call(`superagent_${name}`, args);
   const state = () => JSON.parse(get(dirs, ".superagent/state.json"));
   const brief = (ticket, n) => get(dirs, `.superagent/tickets/${ticket}/turn-${n}.md`);
@@ -70,7 +71,7 @@ describe("checked tickets", () => {
     const r2 = await env.report("dark-toggle-spec", 1, READY);
     assert.deepEqual(tickets(r2), ["dark-toggle-proof"]);
     const p = r2.launch[0];
-    assert.equal(p.agent, "superagent-worker-review");
+    assert.equal(p.agent, "worker-review");
     assert.equal(p.model, "google/gemini-3.8-pro", "another model family than the implementer");
     const pb = env.brief("dark-toggle-proof", 1);
     assert.match(pb, /proof worker/);

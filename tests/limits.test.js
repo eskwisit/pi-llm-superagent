@@ -34,6 +34,7 @@ async function setup(settings = { isolation: "worktree" }) {
   const pi = fakePi(dirs, { settings, models: MODELS });
   const main = loadMain(pi);
   await main.onLoad();
+  await pi.call("superagent", {});
   const call = (name, args) => pi.call(`superagent_${name}`, args);
   const state = () => JSON.parse(fs.readFileSync(path.join(dirs.workspace, ".superagent/state.json"), "utf8"));
   return { dirs, call, state };
@@ -99,7 +100,7 @@ describe("model limits", () => {
 
   it("worker definitions carry host fallback models: one per account, never the first choice's account", async () => {
     const env = await setup();
-    const file = fs.readFileSync(path.join(env.dirs.home, ".agents/subagents/superagent-worker-code.md"), "utf8");
+    const file = fs.readFileSync(path.join(env.dirs.home, ".agents/subagents/worker-code.md"), "utf8");
     const m = /^fallbackModels: \[(.*)\]$/m.exec(file);
     assert.ok(m, "the code worker has fallbackModels");
     const list = m[1].split(", ");

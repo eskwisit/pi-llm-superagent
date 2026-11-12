@@ -40,6 +40,7 @@ async function setup(settings = {}, models = LIST) {
   const pi = fakePi(dirs, { settings, models });
   const main = loadMain(pi);
   await main.onLoad();
+  await pi.call("superagent", {});
   const preview = async (tasks, explain) => (await pi.call("superagent_models", { tasks, explain })).routes;
   return { pi, t: main.__t, preview };
 }
