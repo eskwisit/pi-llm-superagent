@@ -1464,9 +1464,13 @@ ${repo ? `   cd ${repo}\n` : ""}   git rev-parse --is-inside-work-tree   # fails
    elif [ ! -e ${wt}/.git ]; then
      git worktree prune && git worktree add ${wt} ${iso.branch}
    fi
+   src=$(pwd); for d in $(git ls-files --others --ignored --exclude-standard --directory | grep -E '(^|/)(node_modules|\\.venv|venv|vendor|target|\\.tox|Pods)/$'); do
+     [ -e "${wt}/\${d%/}" ] || { mkdir -p "${wt}/$(dirname "$d")" && ln -s "$src/\${d%/}" "${wt}/\${d%/}"; }
+   done
+   [ -x .superagent-setup.sh ] && (cd ${wt} && ./.superagent-setup.sh)
    \`\`\`
 
-   The worktree does not contain the person's untracked files: copy the ones you need. It also has no ignored files, such as installed dependencies or build output: install or link them as the project needs.
+   The worktree does not contain the person's untracked files: copy the ones you need. It has no ignored files either: the script links the installed dependencies of the main checkout (\`node_modules\`, \`.venv\`, \`vendor\`, \`target\`, …) into it and runs the repository's tracked \`.superagent-setup.sh\` when there is one. Never run a dependency install in the worktree while other workers run: parallel installs contend on the package store, hold the host's command slots for minutes and stop every worker's shell. Install only what the links do not cover, and run any command that may take longer than a minute (installs, builds, full test suites) as a background task and wait for it.
 2. **Work only in the worktree.** Read and edit the files under \`${iso.path}/\`, and run every command there (\`cd ${iso.path} && …\` from the workspace root).
 3. **Commit your work on your branch** before you report \`ready\`. These local commits are part of the isolation and are always allowed. Never push, and never change another branch or the main checkout.
 4. **Do not merge.** When you report \`ready\`, a merge worker lands your branch in the person's checkout, together with the work of the other workers.
