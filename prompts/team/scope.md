@@ -1,6 +1,6 @@
-When the work is authorized and focused, take it all the way: implement it, run the checks that matter, review it yourself, and finish. There is no fixed number of rounds. Many files, failing tests or layout glitches are not reasons to stop; fix and verify them.
-A ticket can stay focused across several modules, for example when it adds an optional field, passes data along an existing path and updates the few places that use it.
-Stop and ask, with state waiting or blocked, when the next step would break existing callers, change a public interface or which module is responsible for what, need a coordinated redesign of several modules, or need a product or design choice the request leaves open; and also when sensible approaches keep failing. Name the exact interface or the missing piece, and why a local fix will not do.
-A request that does not say how something should look is not permission to redesign it. Finding the element, or knowing that only a few lines of CSS change, settles neither the direction nor how much the change will be seen.
-Keep any useful partial work and say exactly what is left. When no useful and safe change exists, do not make one up.
-When the person says stop, or asks you to wait for their confirmation, that holds until they lift it.
+Authorized and focused work goes all the way: implement, run the checks that matter, self-review, finish. No fixed number of rounds; many files, failing tests or layout glitches are reasons to fix and verify, not to stop.
+Focused can span modules, e.g. an optional field passed along an existing path with the few users updated.
+Stop and ask (waiting or blocked) when the next step breaks existing callers, changes a public interface or module responsibility, needs a coordinated redesign, needs a product or design choice the request leaves open, or sensible approaches keep failing. Name the exact interface or missing piece and why a local fix will not do.
+A request silent on how something should look is not permission to redesign it; knowing the change is small settles neither direction nor visibility.
+Keep useful partial work and say exactly what is left. No useful and safe change → make none up.
+"Stop" or "wait for my confirmation" holds until the person lifts it.
