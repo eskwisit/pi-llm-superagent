@@ -2878,25 +2878,25 @@ function ticketList(state, cfg) {
 // ---------- tool declarations ----------
 const REQ_SCHEMA = {
   type: "object",
-  description: "Optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids whose model family to avoid], prefer [globs], avoid [globs]",
+  description: "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]",
 };
 const TYPES = ACCEPT_TYPES;
 const ACCEPT_FIELDS = {
-  title: { type: "string", description: "accept: a short label of the original request, at most 200 characters; no added requirements" },
-  name: { type: "string", description: "accept: a short English name; it becomes the ticket id" },
-  acknowledgement: { type: "string", description: `accept: one short sentence, at most ${IM_WORDS} words, naming the concrete change and intended result, in the person's language` },
-  note: { type: "string", description: `accept and attach: optional routing background or an explicit constraint of the person, at most ${NOTE_WORDS} words; never instructions` },
-  type: { type: "string", enum: TYPES, description: "accept: the type of task, which picks the worker and its model" },
+  title: { type: "string", description: "accept: short label of the request, ≤200 chars" },
+  name: { type: "string", description: "accept: short English name, becomes the ticket id" },
+  acknowledgement: { type: "string", description: `accept: one sentence in the person's language naming the concrete change and result, ≤${IM_WORDS} words` },
+  note: { type: "string", description: `optional: routing background or a limit the person stated, ≤${NOTE_WORDS} words; never instructions` },
+  type: { type: "string", enum: TYPES, description: "accept: picks the worker and its model" },
   requirements: REQ_SCHEMA,
-  scope: { type: "string", description: "accept: one sentence naming the work the mandate allows; defaults to the title" },
-  check: { type: "string", enum: CHECK_LEVELS, description: "accept: how the work of a code, debug, test or docs ticket is checked before it is merged. full: a test worker writes acceptance tests from the request while the worker implements, then a proof worker on another model runs them and checks that the change fits the request and the codebase, and sends defects back until it passes. proof: the proof only. none: no check, for a trivial change (a label, a constant, a one-line fix). Default: full for code and debug, proof for test, none for docs" },
-  repo: { type: "string", description: "accept: optional, the project folder the ticket changes when it is its own git repository inside a workspace that holds several (for example neural-radar), relative to the workspace root. Writers in it then run in parallel git worktrees of that repository. On tickets[] entries it defaults to the item's repo. Leave it out when the workspace root is the repository" },
+  scope: { type: "string", description: "accept: one sentence naming the work allowed; defaults to the title" },
+  check: { type: "string", enum: CHECK_LEVELS, description: "accept: check before merge. full: acceptance tests + proof on another model; proof: proof only; none: trivial change. Default full (code, debug), proof (test), none (docs)" },
+  repo: { type: "string", description: "accept: optional project folder (own git repo inside a multi-project workspace), relative to the workspace root; omit when the root is the repo" },
 };
 
 const TOOLS = [
   {
     name: "superagent_config",
-    description: "LLM Superagent: read or save the policy (accept mode, rules, allowed senders, admission), worker slots, eval timeout, pause, role models per task type, model trait overrides, exclusions and team sections; shows your sub-agent models with their inferred traits. Use only from the llm-superagent skill.",
+    description: "LLM Superagent: get or set policy, slots, role models, model traits, exclusions, team sections; lists sub-agent models. Only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
@@ -2906,33 +2906,33 @@ const TOOLS = [
         rules: { type: "array", items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, enabled: { type: "boolean" }, instruction: { type: "string" } } }, description: "set: the full rule list" },
         allowed: { type: "array", items: { type: "string" }, description: "set: sender ids allowed to request work (default [\"person\"])" },
         admission: { type: "object", description: "set: { listedUnaddressed: inferred|ignore, unlistedAddressed: explicit|inferred|ignore, unlistedUnaddressed: inferred|ignore }" },
-        proofRounds: { type: "integer", description: `set: how many times a proof worker may send defects back to the workers of a checked ticket before the person decides, 0–${MAX_PROOF_ROUNDS} (default ${DEFAULT_PROOF_ROUNDS}); 0 turns acceptance tests and proofs off` },
-        maxWorkers: { type: "integer", description: `set: concurrent worker turns, 1–${MAX_WORKERS} (default ${DEFAULT_WORKERS}); one extra slot is kept for a person's message` },
-        evalTimeoutSeconds: { type: "integer", description: `set: how long a candidate waits for a decision, 30–3600 (default ${DEFAULT_EVAL_TIMEOUT})` },
-        paused: { type: "boolean", description: "set: pause or resume processing (evals, launches, replies); messages are still recorded" },
-        isolation: { type: "string", enum: ISOLATION, description: "set: how workers that change files avoid collisions. auto (default): each in its own git worktree once a worker confirms git, merged by a merge worker; one at a time before that or without git. worktree: worktrees from the start. serial: one at a time in the shared checkout" },
-        roleModels: { type: "object", description: "set: { taskType: [model, fallback, …] } pins (task types plus merge); [] removes a pin" },
+        proofRounds: { type: "integer", description: `set: failed proof rounds before the person decides, 0–${MAX_PROOF_ROUNDS} (default ${DEFAULT_PROOF_ROUNDS}); 0 turns checks off` },
+        maxWorkers: { type: "integer", description: `set: concurrent worker turns, 1–${MAX_WORKERS} (default ${DEFAULT_WORKERS})` },
+        evalTimeoutSeconds: { type: "integer", description: `set: seconds a candidate waits for a decision, 30–3600 (default ${DEFAULT_EVAL_TIMEOUT})` },
+        paused: { type: "boolean", description: "set: pause processing; messages are still recorded" },
+        isolation: { type: "string", enum: ISOLATION, description: "set: writers in git worktrees once git is confirmed (auto, default), from the start (worktree), or one at a time (serial)" },
+        roleModels: { type: "object", description: "set: { taskType: [model, fallback, …] }; [] removes a pin" },
         profiles: { type: "object", description: "set: { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision|reasoningModel|unstable: bool, thinking: [levels] } }; null removes" },
         exclude: { type: "array", items: { type: "string" }, description: "set: model id globs never to use" },
         include: { type: "array", items: { type: "string" }, description: "set: exclusion globs to remove" },
-        excludeThinking: { type: "array", items: { type: "string", enum: THINKING }, description: "set: the full list of thinking levels workers never get; a higher wanted level goes down to the next allowed one (default [\"high\", \"xhigh\", \"max\"]; [] allows all)" },
+        excludeThinking: { type: "array", items: { type: "string", enum: THINKING }, description: "set: thinking levels workers never get (default [\"high\", \"xhigh\", \"max\"]; [] allows all)" },
         notes: { type: "array", items: { type: "string" } },
         team: { type: "object", description: "set: { communication|scope|delivery: text }; \"\" restores the default" },
         show: { type: "array", items: { type: "string" }, description: "get: team sections to return in full" },
-        clear: { type: "boolean", description: "set: forget role models, overrides, exclusions and notes first" },
+        clear: { type: "boolean", description: "set: reset role models, overrides, exclusions and notes first" },
       },
     },
     execute: superConfig,
   },
   {
     name: "superagent_models",
-    description: "LLM Superagent: preview which of your sub-agent models (with fallbacks and suggested thinking level) a task type and requirements would get. Use only from the llm-superagent skill.",
+    description: "LLM Superagent: preview the model, fallbacks and thinking level a task type and requirements get. Only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
       properties: {
         tasks: { type: "array", items: { type: "object", properties: { id: { type: "string" }, type: { type: "string", enum: TYPES }, requirements: REQ_SCHEMA }, required: ["type"] } },
-        explain: { type: "boolean", description: "Also return the top 5 candidates with scores" },
+        explain: { type: "boolean", description: "also return the top 5 candidates with scores" },
       },
       required: ["tasks"],
     },
@@ -2940,14 +2940,14 @@ const TOOLS = [
   },
   {
     name: "superagent_intake",
-    description: "LLM Superagent: record a person's chat message as a trigger. A reply on a ticket's thread goes straight to that ticket's worker (follow-up); anything else goes through the gate to Eval and comes back as a candidate card. Use only from the llm-superagent skill.",
+    description: "LLM Superagent: record a person's message verbatim; a thread reply goes to that ticket's worker, anything else returns a candidate card. Only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
       properties: {
         text: { type: "string", description: "The person's message, verbatim" },
-        addressed: { type: "boolean", description: "false when the message is not addressed to you as a request (shared material, an aside, thinking aloud); default true" },
-        thread: { type: "string", description: "Only when the message replies within an existing thread (answers a ticket's question, or follows up on its result): that thread key" },
+        addressed: { type: "boolean", description: "false for shared material, an aside or thinking aloud; default true" },
+        thread: { type: "string", description: "only when the message replies within an existing thread: its key" },
       },
       required: ["text"],
     },
@@ -2955,7 +2955,7 @@ const TOOLS = [
   },
   {
     name: "superagent_route",
-    description: "LLM Superagent: decide waiting candidates, one item each: accept (new ticket, or one ticket per separate request with tickets[]; explicit requests only), attach (to a ticket the message points at), stop (a ticket, at the person's request) or ignore (with a reason). Items are processed independently. Use only from the llm-superagent skill.",
+    description: "LLM Superagent: decide explicit candidate cards: accept (one ticket, or tickets[] per named part), attach, stop or ignore; items are independent. Only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
@@ -2966,18 +2966,18 @@ const TOOLS = [
             type: "object",
             properties: {
               kind: { type: "string", enum: ["accept", "attach", "stop", "ignore"] },
-              trigger_id: { type: "string", description: "The candidate card's trigger_id (a follow-up's for stop)" },
+              trigger_id: { type: "string", description: "the card's trigger_id (a follow-up's for stop)" },
               ticket_id: { type: "string", description: "attach and stop: the ticket" },
               reason: { type: "string", description: "ignore and stop: why, at most 500 characters" },
               ...ACCEPT_FIELDS,
               tickets: {
                 type: "array",
-                description: `accept: when the message holds several separate requests, one entry per request (2–${MAX_SPLIT}); they run in parallel, except an entry with after, which starts once those tickets ended. Each needs title, name, type and scope (the part of the message it owns); acknowledgement stays on the item and covers all of them`,
+                description: `accept: one entry per part the message names (2–${MAX_SPLIT}), run in parallel unless after; the item's acknowledgement covers all`,
                 items: {
                   type: "object",
                   properties: {
                     ...Object.fromEntries(Object.entries(ACCEPT_FIELDS).filter(([k]) => k !== "acknowledgement")),
-                    after: { type: "array", items: { type: "string" }, description: "optional: the names of other entries of this tickets list whose results this ticket needs (for example a comparison of their outputs). It starts once they ended (a writer's branch merged), and its brief lists their reports. Leave it out for parts that can run in parallel" },
+                    after: { type: "array", items: { type: "string" }, description: "optional: names of entries whose results this one needs; it starts once they ended" },
                   },
                   required: ["title", "name", "type", "scope"],
                 },
@@ -2993,7 +2993,7 @@ const TOOLS = [
   },
   {
     name: "superagent_eval_decide",
-    description: "LLM Superagent: record the assessment of a proactive (inferred) candidate against every enabled rule; accept creates a ticket only in auto mode and only with a settled direction and a matched rule. Use only from the llm-superagent skill.",
+    description: "LLM Superagent: judge an inferred candidate against every enabled rule; accept creates a ticket only in auto mode with a settled direction. Only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
@@ -3010,7 +3010,7 @@ const TOOLS = [
             evidence: { type: "string" },
           },
         },
-        intent_evidence: { type: "string", description: "accept: the three facts (this project, a change is wanted, direction settled) with source quotes" },
+        intent_evidence: { type: "string", description: "accept: the three facts (this project, change wanted, direction settled) with quotes" },
         reason: { type: "string" },
         ...ACCEPT_FIELDS,
       },
@@ -3020,7 +3020,7 @@ const TOOLS = [
   },
   {
     name: "superagent_reply",
-    description: "LLM Superagent: clear a message to the person by its purpose before you post it: result (a ready, completed or dropped ticket), attention (the ticket's open question, copied exactly) or answer (a question the worker answered); at most 100 words, never twice. Use only from the llm-superagent skill.",
+    description: "LLM Superagent: clear a message to the person before posting: result, attention (the ticket's question, exact) or answer; ≤100 words, never twice. Only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
@@ -3028,8 +3028,8 @@ const TOOLS = [
         purpose: { type: "string", enum: ["result", "attention", "answer"] },
         ticket_id: { type: "string" },
         trigger_id: { type: "string", description: "answer: the person's question" },
-        question: { type: "string", description: "attention: the ticket's open question, exactly" },
-        text: { type: "string", description: "The message, at most 100 words" },
+        question: { type: "string", description: "attention: the ticket's question, exactly" },
+        text: { type: "string", description: "the message, ≤100 words" },
       },
       required: ["purpose", "text"],
     },
@@ -3037,7 +3037,7 @@ const TOOLS = [
   },
   {
     name: "superagent_ticket",
-    description: "LLM Superagent: list (what needs the person first), read, report (record a worker turn when its sub-agent returns), retry, recover (a turn lost to a restart), status, note, unsubscribe (a thread), requeue (a message to Eval), dismiss (an unavailable decision), merge (queue unmerged branches again). Use only from the llm-superagent skill.",
+    description: "LLM Superagent: list, read, report (a returned worker turn), retry, recover, status, note, unsubscribe, requeue, dismiss, merge. Only from the llm-superagent skill.",
     risk: "low",
     schema: {
       type: "object",
@@ -3046,11 +3046,11 @@ const TOOLS = [
         ticket: { type: "string" },
         turn: { type: "integer", description: "report: the turn number that returned" },
         attempt: { type: "integer", description: "report: the launch item's attempt number" },
-        outcome: { type: "string", enum: ["returned", "error"], description: "report: the sub-agent returned, or failed (error, timeout, limit)" },
+        outcome: { type: "string", enum: ["returned", "error"], description: "report: returned, or failed (error, timeout, limit)" },
         error: { type: "string", description: "report: the failure text" },
-        failures: { type: "string", description: "report: every `Model … failed (…)` line of the Task result, verbatim, also when the worker then returned; a rate-limited account then gets no new launch for a while" },
-        text: { type: "string", description: "report: the sub-agent's reply, used only when it wrote no report file. note: one fact from other work, at most 100 words" },
-        model: { type: "string", description: "retry: run on this model instead (a new worker session)" },
+        failures: { type: "string", description: "report: every `Model … failed (…)` line of the Task result, verbatim, even when the worker then returned" },
+        text: { type: "string", description: "report: the sub-agent's reply (fallback when no report file). note: one fact, ≤100 words" },
+        model: { type: "string", description: "retry: run on this model instead" },
         thread: { type: "string", description: "unsubscribe: the thread key" },
         trigger_id: { type: "string", description: "requeue: the message" },
         decision: { type: "string", description: "dismiss: the unavailable decision id" },
