@@ -636,79 +636,107 @@
 		],
 		"settings": [
 			{
-				"key": "policy",
-				"title": "Policy",
-				"description": "Accept mode (off, observe, auto), rules for proactive work, allowed senders and admission. Edit through the agent (superagent config set) rather than by hand.",
-				"type": "json",
-				"default": {}
-			},
-			{
-				"key": "maxWorkers",
-				"title": "Concurrent workers",
-				"description": "Worker turns running at once (1–8); one extra slot is kept for your messages.",
-				"type": "number",
-				"default": 6
-			},
-			{
-				"key": "proofRounds",
-				"title": "Proof rounds",
-				"description": "Checked code and debug tickets get acceptance tests written in parallel and a proof by another model, which sends defects back to the worker until the work passes. This is how many proof rounds may fail before you decide (0–6); 0 turns checks off.",
-				"type": "number",
-				"default": 3
-			},
-			{
-				"key": "evalTimeoutSeconds",
-				"title": "Eval timeout (seconds)",
-				"description": "How long a candidate waits for a decision before it is queued again (30–3600).",
-				"type": "number",
-				"default": 120
-			},
-			{
 				"key": "paused",
 				"title": "Paused",
-				"description": "Pause processing: messages are recorded, nothing is evaluated, launched or sent.",
+				"description": "Stop all work. Messages are recorded. Nothing is evaluated, started or sent. Example: true while you reorganize the repository.",
+				"type": "boolean",
+				"default": false
+			},
+			{
+				"key": "cleanupTickets",
+				"title": "Clean up tickets when done",
+				"description": "Move the briefs and reports of a ticket to the trash when the ticket ends. Off keeps them for review. Example: true in a workspace with many small tickets.",
 				"type": "boolean",
 				"default": false
 			},
 			{
 				"key": "isolation",
 				"title": "Isolation of workers that change files",
-				"description": "auto: each code or docs worker works in its own git worktree once git is found in the workspace or the ticket's repo folder, and a merge worker lands the branches in your checkout; one at a time before that or without git. worktree: worktrees from the start. serial: one at a time in your checkout.",
+				"description": "How workers that change files avoid collisions. auto: worktrees after git is found. worktree: worktrees from the first ticket. serial: one worker at a time. Example: serial",
 				"type": "string",
 				"default": "auto"
 			},
 			{
-				"key": "cleanupTickets",
-				"title": "Clean up tickets when done",
-				"description": "Remove a ticket's briefs and reports under .superagent/tickets once it ends (completed, dropped, failed or stopped). Files go to the trash. Off keeps them for review.",
-				"type": "boolean",
-				"default": false
+				"key": "maxWorkers",
+				"title": "Concurrent workers",
+				"description": "Number of worker turns that run at the same time (1 to 8). One more slot stays free for your messages. Example: 4",
+				"type": "number",
+				"default": 6
+			},
+			{
+				"key": "proofRounds",
+				"title": "Proof rounds",
+				"description": "Number of failed proof rounds before the team asks you to decide (0 to 6). 0 turns the checks off. Example: 2",
+				"type": "number",
+				"default": 3
+			},
+			{
+				"key": "evalTimeoutSeconds",
+				"title": "Eval timeout (seconds)",
+				"description": "Seconds a candidate waits for a decision (30 to 3600). After this time it goes back to the queue. Example: 300",
+				"type": "number",
+				"default": 120
+			},
+			{
+				"key": "communication",
+				"title": "Team section: Communication",
+				"description": "Your text for the Communication section that each worker reads. Empty uses the default. Example: Report in English. Keep summaries under 40 words.",
+				"type": "string",
+				"default": ""
+			},
+			{
+				"key": "ticketScope",
+				"title": "Team section: Ticket scope",
+				"description": "Your text for the Ticket scope section that each worker reads. Empty uses the default. Example: Change only the files the ticket names.",
+				"type": "string",
+				"default": ""
+			},
+			{
+				"key": "delivery",
+				"title": "Team section: Delivery requirements",
+				"description": "Your text for the Delivery requirements section that each worker reads. Empty uses the default. Example: Run npm test before you report ready.",
+				"type": "string",
+				"default": ""
+			},
+			{
+				"key": "promptRevision",
+				"title": "Prompt revision",
+				"description": "Count of saves of the team sections. Each brief records the revision it was written with. Do not change it. Example: 3",
+				"type": "number",
+				"default": 0
+			},
+			{
+				"key": "policy",
+				"title": "Policy",
+				"description": "Accept mode, rules for proactive work, allowed senders and admission. Let the agent set it with superagent config set. Example: {\"mode\": \"auto\"}",
+				"type": "json",
+				"default": {}
 			},
 			{
 				"key": "roleModels",
 				"title": "Role models",
-				"description": "Models pinned per task type, { type: [model, fallback, …] }. Types: code, debug, test, research, analysis, review, docs, run, and the internal merge, spec (acceptance tests) and proof. Empty means picked automatically from your list.",
+				"description": "Models pinned per task type. The first model is used, the next ones are fallbacks. Empty picks from your list. Example: {\"code\": [\"anthropic/claude-sonnet-5-5\"]}",
 				"type": "json",
 				"default": {}
 			},
 			{
 				"key": "modelProfiles",
 				"title": "Model trait overrides",
-				"description": "Corrections to inferred model traits, { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision: bool } }.",
+				"description": "Corrections to the traits the plugin infers for a model. Traits: reasoning, coding, writing, context, speed, cost (1 to 5) and vision. Example: {\"openai/gpt-5*\": {\"coding\": 5}}",
 				"type": "json",
 				"default": {}
 			},
 			{
 				"key": "excludeModels",
 				"title": "Excluded models",
-				"description": "Glob patterns of model ids never used, e.g. [\"*preview*\"].",
+				"description": "Glob patterns of model ids that workers never use. Example: [\"*preview*\", \"google/*\"]",
 				"type": "json",
 				"default": []
 			},
 			{
 				"key": "excludeThinking",
 				"title": "Excluded thinking levels",
-				"description": "Thinking levels workers never get, e.g. [\"high\", \"xhigh\", \"max\"]. A higher wanted level goes down to the next allowed one. [] allows all.",
+				"description": "Thinking levels that workers never get. A higher wanted level goes down to the next allowed one. Empty allows all. Example: [\"xhigh\", \"max\"]",
 				"type": "json",
 				"default": [
 					"high",
@@ -719,37 +747,9 @@
 			{
 				"key": "modelNotes",
 				"title": "Model notes",
-				"description": "Notes the orchestrator reads before routing, e.g. why a model is excluded.",
+				"description": "Notes the orchestrator reads before it routes a ticket. Example: [\"gpt-5 times out on large diffs\"]",
 				"type": "json",
 				"default": []
-			},
-			{
-				"key": "communication",
-				"title": "Team section: Communication",
-				"description": "Replaces the default Communication section every worker reads. Empty uses the default.",
-				"type": "string",
-				"default": ""
-			},
-			{
-				"key": "ticketScope",
-				"title": "Team section: Ticket scope",
-				"description": "Replaces the default Ticket scope section. Empty uses the default.",
-				"type": "string",
-				"default": ""
-			},
-			{
-				"key": "delivery",
-				"title": "Team section: Delivery requirements",
-				"description": "Replaces the default Delivery requirements section. Empty uses the default.",
-				"type": "string",
-				"default": ""
-			},
-			{
-				"key": "promptRevision",
-				"title": "Prompt revision",
-				"description": "Counts saves of the team sections; each brief records the revision it was written under.",
-				"type": "number",
-				"default": 0
 			}
 		]
 	},
