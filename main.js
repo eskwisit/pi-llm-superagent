@@ -45,17 +45,17 @@ const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const DEFAULT_EXCLUDE_THINKING = ["high", "xhigh", "max"];
 
 const TASK_TYPES = {
-  code: { agent: "superagent-worker-code", weights: { coding: 5, reasoning: 3, context: 2 }, thinking: "medium", about: "implement a change: feature, fix, refactor", writes: true },
-  debug: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 5, context: 2 }, thinking: "high", about: "find and fix the root cause of a failure", writes: true },
-  test: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 2, speed: 2, cost: 1 }, thinking: "medium", about: "write or repair tests", writes: true },
-  research: { agent: "superagent-worker-research", weights: { reasoning: 3, context: 4, speed: 2, cost: 1 }, thinking: "medium", about: "investigate code, docs or behaviour and answer with evidence; read-only" },
-  analysis: { agent: "superagent-worker-analysis", weights: { reasoning: 5, context: 3, coding: 1 }, thinking: "high", about: "design, tradeoff, data or root-cause analysis; read-only" },
-  review: { agent: "superagent-worker-review", weights: { reasoning: 5, coding: 3, context: 3 }, thinking: "high", about: "review a change or another ticket's result for defects; read-only" },
-  docs: { agent: "superagent-worker-docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose", writes: true },
+  code: { agent: "worker-code", weights: { coding: 5, reasoning: 3, context: 2 }, thinking: "medium", about: "implement a change: feature, fix, refactor", writes: true },
+  debug: { agent: "worker-code", weights: { coding: 4, reasoning: 5, context: 2 }, thinking: "high", about: "find and fix the root cause of a failure", writes: true },
+  test: { agent: "worker-code", weights: { coding: 4, reasoning: 2, speed: 2, cost: 1 }, thinking: "medium", about: "write or repair tests", writes: true },
+  research: { agent: "worker-research", weights: { reasoning: 3, context: 4, speed: 2, cost: 1 }, thinking: "medium", about: "investigate code, docs or behaviour and answer with evidence; read-only" },
+  analysis: { agent: "worker-analysis", weights: { reasoning: 5, context: 3, coding: 1 }, thinking: "high", about: "design, tradeoff, data or root-cause analysis; read-only" },
+  review: { agent: "worker-review", weights: { reasoning: 5, coding: 3, context: 3 }, thinking: "high", about: "review a change or another ticket's result for defects; read-only" },
+  docs: { agent: "worker-docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose", writes: true },
   // internal: started by the plugin, never accepted from a message
-  merge: { agent: "superagent-worker-code", weights: { coding: 4, reasoning: 4, context: 2 }, thinking: "medium", about: "land finished ticket branches in the person's checkout and resolve their conflicts", writes: true, internal: true },
-  spec: { agent: "superagent-worker-code", weights: { coding: 3, reasoning: 2, speed: 2, cost: 3 }, thinking: "low", about: "write the acceptance checklist and tests of a change from its request, apart from its implementation", writes: true, internal: true },
-  proof: { agent: "superagent-worker-review", weights: { reasoning: 3, coding: 3, speed: 1, cost: 3 }, thinking: "medium", about: "check that finished work passes its acceptance tests and fits the request and the codebase, and list its defects; read-only", internal: true },
+  merge: { agent: "worker-code", weights: { coding: 4, reasoning: 4, context: 2 }, thinking: "medium", about: "land finished ticket branches in the person's checkout and resolve their conflicts", writes: true, internal: true },
+  spec: { agent: "worker-code", weights: { coding: 3, reasoning: 2, speed: 2, cost: 3 }, thinking: "low", about: "write the acceptance checklist and tests of a change from its request, apart from its implementation", writes: true, internal: true },
+  proof: { agent: "worker-review", weights: { reasoning: 3, coding: 3, speed: 1, cost: 3 }, thinking: "medium", about: "check that finished work passes its acceptance tests and fits the request and the codebase, and list its defects; read-only", internal: true },
 };
 const AGENTS = [...new Set(Object.values(TASK_TYPES).map((t) => t.agent))];
 /** Task types a decision may accept; `merge` is the plugin's own. */
@@ -83,8 +83,8 @@ const LIMIT_COOLDOWN_MS = 15 * 60 * 1000; // a provider account that hit a limit
 const MODEL_FAILED = /Model (\S+) failed \(([A-Z_]+)\):\s*([^\n]*)/g;
 const GATEWAY_NAME = "superagent"; // the one tool registered at load
 const NOTE_WORDS = 30; // routing note
-const GENERIC_ACK_RE = /^\W*(ok(ay)?|sure|on it|will do|got it|i'?ll (handle|do|take care of) (it|this|that))\W*$/i; // an acknowledgement that names nothing
 const IM_WORDS = 100; // any message to the person
+const GENERIC_ACK_RE = /^\W*(ok(ay)?|sure|on it|will do|got it|i'?ll (handle|do|take care of) (it|this|that))\W*$/i; // an acknowledgement that names nothing
 const NOTE_FACT_WORDS = 100; // a note about other work
 const DEFAULT_WORKERS = 6;
 const MAX_WORKERS = 8;
@@ -1848,6 +1848,15 @@ function installPersonas(exclude = DEFAULT_EXCLUDE_THINKING, fallbacks = {}) {
   const wanted = new Set(AGENTS.map((a) => `${a}.md`));
   fs.mkdirSync(dst, { recursive: true });
   const changed = [];
+  // releases before 0.15 installed the workers as superagent-worker-*.md; drop those copies once
+  for (const name of AGENTS) {
+    const legacy = path.join(dst, `superagent-${name}.md`);
+    try {
+      if (fs.readFileSync(legacy, "utf8").includes(MARKER)) fs.rmSync(legacy, { force: true });
+    } catch {
+      // none
+    }
+  }
   for (const name of wanted) {
     const body = Buffer.from(personaBody(name, exclude, fallbacks[name.replace(/\.md$/, "")] || []), "utf8");
     const target = path.join(dst, name);
