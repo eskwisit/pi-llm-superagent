@@ -16,15 +16,15 @@
 		"en": {
 			"name": "LLM Superagent",
 			"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
-			"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds eight tools at load: the gateway (superagent), which the orchestrating agent calls first, and the seven team tools it calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket); until activated through ToolSearch, each costs one line in the on-demand tool list. models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-*.md sub-agents to ~/.agents/subagents when the gateway is first called in a session and after a settings change, with the thinking level that excludeThinking allows (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and every worker can run shell commands, with the permissions PI-Desktop grants sub-agents. Workers that change files run in parallel, each in its own git worktree under .superagent/worktrees on a local superagent/<ticket> branch; a merge worker then lands the branches in your checkout as uncommitted changes. Without git they run one at a time. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings."
+			"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds one tool at load (superagent); until activated through ToolSearch it costs one line in the on-demand tool list. Called without arguments it is the setup call; with one operation key (config, models, intake, route, eval_decide, reply, ticket) it runs that team operation. models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its two sub-agents (superagent-writer.md, superagent-reader.md) to ~/.agents/subagents when the setup call is first made in a session and after a settings change, with the thinking level that excludeThinking allows (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections and role rules. Workers are ordinary PI-Desktop sub-agents: the writer can edit workspace files, the reader cannot, and both can run shell commands, with the permissions PI-Desktop grants sub-agents. Workers that change files run in parallel, each in its own git worktree under .superagent/worktrees on a local superagent/<ticket> branch; a merge worker then lands the branches in your checkout as uncommitted changes. Without git they run one at a time. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings."
 		},
 		"zh-CN": {
 			"name": "LLM 超级智能体",
 			"description": "适用于任何大模型的自主团队：你的智能体把每个请求转为一张工单，交给一个工作子智能体（代码、调研、分析、审查、文档），并从你的模型列表中挑选最适合该任务类型和要求的模型来运行。",
-			"safetyNotes": "智能体工具加一个技能；不访问网络，插件本身不运行任何进程。agent.prompt.inject 用于为 Skill 工具索引 LLM 超级智能体技能。agent.tool.register 在加载时注册八个工具：编排智能体首先调用的入口工具（superagent），以及它调用的七个团队工具（superagent_config、superagent_models、superagent_intake、superagent_route、superagent_eval_decide、superagent_reply、superagent_ticket）；在通过 ToolSearch 激活之前，每个工具只在按需工具列表中占一行。models.list 读取你在已登录的模型中启用给子智能体的那些模型（从不读取任何密钥），用于为每个工作者挑选模型。fs.read 与 fs.write 仅限工作区中的 .superagent/**，团队在其中保存状态、工作简报和报告。在宿主文件 API 之外，插件仅用 Node fs 做以下事情：会话中首次调用工具时及设置变更后将五个 superagent-*.md 子智能体复制到 ~/.agents/subagents，并写入 excludeThinking 允许的思考级别（PI-Desktop 唯一加载子智能体的位置），卸载时删除它们（你修改过的除外），以及读取插件自带的默认团队章节。工作者是普通的 PI-Desktop 子智能体：代码和文档工作者可以编辑工作区文件，所有工作者都可以运行 shell 命令，权限与 PI-Desktop 授予子智能体的相同。修改文件的工作者并行运行，各自在 .superagent/worktrees 下自己的 git 工作树中、在本地 superagent/<工单> 分支上工作；随后由合并工作者把这些分支作为未提交的更改合入你的检出目录。没有 git 时，它们一次只运行一个。策略、角色模型、特性覆盖、排除项、备注、并发数和团队章节均保存在插件设置中。"
+			"safetyNotes": "智能体工具加一个技能；不访问网络，插件本身不运行任何进程。agent.prompt.inject 用于为 Skill 工具索引 LLM 超级智能体技能。agent.tool.register 在加载时只注册一个工具（superagent）；在通过 ToolSearch 激活之前，它只在按需工具列表中占一行。不带参数调用时为初始化；带一个操作键（config、models、intake、route、eval_decide、reply、ticket）时执行对应的团队操作。models.list 读取你在已登录的模型中启用给子智能体的那些模型（从不读取任何密钥），用于为每个工作者挑选模型。fs.read 与 fs.write 仅限工作区中的 .superagent/**，团队在其中保存状态、工作简报和报告。在宿主文件 API 之外，插件仅用 Node fs 做以下事情：会话中首次初始化时及设置变更后将两个子智能体（superagent-writer.md、superagent-reader.md）复制到 ~/.agents/subagents，并写入 excludeThinking 允许的思考级别（PI-Desktop 唯一加载子智能体的位置），卸载时删除它们（你修改过的除外），以及读取插件自带的默认团队章节和角色规则。工作者是普通的 PI-Desktop 子智能体：writer 可以编辑工作区文件，reader 不能，二者都可以运行 shell 命令，权限与 PI-Desktop 授予子智能体的相同。修改文件的工作者并行运行，各自在 .superagent/worktrees 下自己的 git 工作树中、在本地 superagent/<工单> 分支上工作；随后由合并工作者把这些分支作为未提交的更改合入你的检出目录。没有 git 时，它们一次只运行一个。策略、角色模型、特性覆盖、排除项、备注、并发数和团队章节均保存在插件设置中。"
 		}
 	},
-	"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds eight tools at load: the gateway (superagent), which the orchestrating agent calls first, and the seven team tools it calls (superagent_config, superagent_models, superagent_intake, superagent_route, superagent_eval_decide, superagent_reply, superagent_ticket); until activated through ToolSearch, each costs one line in the on-demand tool list. models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its five superagent-*.md sub-agents to ~/.agents/subagents when the gateway is first called in a session and after a settings change, with the thinking level that excludeThinking allows (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections. Workers are ordinary PI-Desktop sub-agents: the code and docs workers can edit workspace files, and every worker can run shell commands, with the permissions PI-Desktop grants sub-agents. Workers that change files run in parallel, each in its own git worktree under .superagent/worktrees on a local superagent/<ticket> branch; a merge worker then lands the branches in your checkout as uncommitted changes. Without git they run one at a time. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings.",
+	"safetyNotes": "Agent tools plus a skill; no network access and no process execution. agent.prompt.inject indexes the LLM Superagent skill for the Skill tool. agent.tool.register adds one tool at load (superagent); until activated through ToolSearch it costs one line in the on-demand tool list. Called without arguments it is the setup call; with one operation key (config, models, intake, route, eval_decide, reply, ticket) it runs that team operation. models.list reads which of your signed-in models you enabled for sub-agents (never any key) to pick each worker's model. fs.read and fs.write are scoped to .superagent/** in the workspace, where the team keeps its state, worker briefs and reports. Beyond the host file API the plugin uses Node fs only to copy its two sub-agents (superagent-writer.md, superagent-reader.md) to ~/.agents/subagents when the setup call is first made in a session and after a settings change, with the thinking level that excludeThinking allows (the only place PI-Desktop loads sub-agents from), remove them on unload unless you edited them, and read its own default team sections and role rules. Workers are ordinary PI-Desktop sub-agents: the writer can edit workspace files, the reader cannot, and both can run shell commands, with the permissions PI-Desktop grants sub-agents. Workers that change files run in parallel, each in its own git worktree under .superagent/worktrees on a local superagent/<ticket> branch; a merge worker then lands the branches in your checkout as uncommitted changes. Without git they run one at a time. The policy, role models, trait overrides, exclusions, notes, slots and team sections are plugin settings.",
 	"changelog": "A new run task type splits tests, builds or linters into read-only parts that share the main checkout, and the workers are named superagent-*.",
 	"contributes": {
 		"skills": [
@@ -33,625 +33,598 @@
 		"agentTools": [
 			{
 				"name": "superagent",
-				"description": "LLM Superagent gateway: call first, only from the llm-superagent skill.",
-				"risk": "low",
-				"schema": {
-					"type": "object",
-					"properties": {}
-				}
-			},
-			{
-				"name": "superagent_config",
-				"description": "LLM Superagent: get or set policy, slots, role models, model traits, exclusions, team sections; lists sub-agent models. Only from the llm-superagent skill.",
+				"description": "LLM Superagent: no arguments = setup; else exactly one operation key. Only from the llm-superagent skill.",
 				"risk": "low",
 				"schema": {
 					"type": "object",
 					"properties": {
-						"action": {
-							"type": "string",
-							"enum": [
-								"get",
-								"set"
-							]
+						"config": {
+							"type": "object",
+							"properties": {
+								"action": {
+									"type": "string",
+									"enum": [
+										"get",
+										"set"
+									]
+								},
+								"mode": {
+									"type": "string",
+									"enum": [
+										"off",
+										"observe",
+										"auto"
+									],
+									"description": "set: accept mode for proactive (inferred) candidates"
+								},
+								"rules": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"properties": {
+											"id": {
+												"type": "string"
+											},
+											"name": {
+												"type": "string"
+											},
+											"enabled": {
+												"type": "boolean"
+											},
+											"instruction": {
+												"type": "string"
+											}
+										}
+									},
+									"description": "set: the full rule list"
+								},
+								"allowed": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "set: sender ids allowed to request work (default [\"person\"])"
+								},
+								"admission": {
+									"type": "object",
+									"description": "set: { listedUnaddressed: inferred|ignore, unlistedAddressed: explicit|inferred|ignore, unlistedUnaddressed: inferred|ignore }"
+								},
+								"proofRounds": {
+									"type": "integer",
+									"description": "set: failed proof rounds before the person decides, 0–6 (default 3); 0 turns checks off"
+								},
+								"maxWorkers": {
+									"type": "integer",
+									"description": "set: concurrent worker turns, 1–8 (default 6)"
+								},
+								"evalTimeoutSeconds": {
+									"type": "integer",
+									"description": "set: seconds a candidate waits for a decision, 30–3600 (default 120)"
+								},
+								"paused": {
+									"type": "boolean",
+									"description": "set: pause processing; messages are still recorded"
+								},
+								"isolation": {
+									"type": "string",
+									"enum": [
+										"auto",
+										"worktree",
+										"serial"
+									],
+									"description": "set: writers in git worktrees once git is confirmed (auto, default), from the start (worktree), or one at a time (serial)"
+								},
+								"roleModels": {
+									"type": "object",
+									"description": "set: { taskType: [model, fallback, …] }; [] removes a pin"
+								},
+								"profiles": {
+									"type": "object",
+									"description": "set: { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision|reasoningModel|unstable: bool, thinking: [levels] } }; null removes"
+								},
+								"exclude": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "set: model id globs never to use"
+								},
+								"include": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "set: exclusion globs to remove"
+								},
+								"excludeThinking": {
+									"type": "array",
+									"items": {
+										"type": "string",
+										"enum": [
+											"off",
+											"minimal",
+											"low",
+											"medium",
+											"high",
+											"xhigh",
+											"max"
+										]
+									},
+									"description": "set: thinking levels workers never get (default [\"high\", \"xhigh\", \"max\"]; [] allows all)"
+								},
+								"notes": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								"team": {
+									"type": "object",
+									"description": "set: { communication|scope|delivery: text }; \"\" restores the default"
+								},
+								"show": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "get: team sections to return in full"
+								},
+								"clear": {
+									"type": "boolean",
+									"description": "set: reset role models, overrides, exclusions and notes first"
+								}
+							},
+							"description": "get or set policy, slots, role models, model traits, exclusions, team sections; lists sub-agent models."
 						},
-						"mode": {
-							"type": "string",
-							"enum": [
-								"off",
-								"observe",
-								"auto"
+						"models": {
+							"type": "object",
+							"properties": {
+								"tasks": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"properties": {
+											"id": {
+												"type": "string"
+											},
+											"type": {
+												"type": "string",
+												"enum": [
+													"code",
+													"debug",
+													"test",
+													"research",
+													"analysis",
+													"review",
+													"docs",
+													"run"
+												]
+											},
+											"requirements": {
+												"type": "object",
+												"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
+											}
+										},
+										"required": [
+											"type"
+										]
+									}
+								},
+								"explain": {
+									"type": "boolean",
+									"description": "also return the top 5 candidates with scores"
+								}
+							},
+							"required": [
+								"tasks"
 							],
-							"description": "set: accept mode for proactive (inferred) candidates"
+							"description": "preview the model, fallbacks and thinking level a task type and requirements get."
 						},
-						"rules": {
-							"type": "array",
-							"items": {
-								"type": "object",
-								"properties": {
-									"id": {
-										"type": "string"
-									},
-									"name": {
-										"type": "string"
-									},
-									"enabled": {
-										"type": "boolean"
-									},
-									"instruction": {
-										"type": "string"
+						"intake": {
+							"type": "object",
+							"properties": {
+								"text": {
+									"type": "string",
+									"description": "The person's message, verbatim"
+								},
+								"addressed": {
+									"type": "boolean",
+									"description": "false for shared material, an aside or thinking aloud; default true"
+								},
+								"thread": {
+									"type": "string",
+									"description": "only when the message replies within an existing thread: its key"
+								}
+							},
+							"required": [
+								"text"
+							],
+							"description": "record a person's message verbatim; a thread reply goes to that ticket's worker, anything else returns a candidate card."
+						},
+						"route": {
+							"type": "object",
+							"properties": {
+								"decisions": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"properties": {
+											"kind": {
+												"type": "string",
+												"enum": [
+													"accept",
+													"attach",
+													"stop",
+													"ignore"
+												]
+											},
+											"trigger_id": {
+												"type": "string",
+												"description": "the card's trigger_id (a follow-up's for stop)"
+											},
+											"ticket_id": {
+												"type": "string",
+												"description": "attach and stop: the ticket"
+											},
+											"reason": {
+												"type": "string",
+												"description": "ignore and stop: why, at most 500 characters"
+											},
+											"title": {
+												"type": "string",
+												"description": "accept: short label of the request, ≤200 chars"
+											},
+											"name": {
+												"type": "string",
+												"description": "accept: short English name, becomes the ticket id"
+											},
+											"acknowledgement": {
+												"type": "string",
+												"description": "accept: one sentence in the person's language naming the concrete change and result, ≤100 words"
+											},
+											"note": {
+												"type": "string",
+												"description": "optional: routing background or a limit the person stated, ≤30 words; never instructions"
+											},
+											"type": {
+												"type": "string",
+												"enum": [
+													"code",
+													"debug",
+													"test",
+													"research",
+													"analysis",
+													"review",
+													"docs",
+													"run"
+												],
+												"description": "accept: picks the worker and its model"
+											},
+											"requirements": {
+												"type": "object",
+												"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
+											},
+											"scope": {
+												"type": "string",
+												"description": "accept: one sentence naming the work allowed; defaults to the title"
+											},
+											"check": {
+												"type": "string",
+												"enum": [
+													"full",
+													"proof",
+													"none"
+												],
+												"description": "accept: check before merge. full: acceptance tests + proof on another model; proof: proof only; none: trivial change. Default full (code, debug), proof (test), none (docs)"
+											},
+											"repo": {
+												"type": "string",
+												"description": "accept: optional project folder (own git repo inside a multi-project workspace), relative to the workspace root; omit when the root is the repo"
+											},
+											"tickets": {
+												"type": "array",
+												"description": "accept: one entry per part the message names (2–8), run in parallel unless after; the item's acknowledgement covers all",
+												"items": {
+													"type": "object",
+													"properties": {
+														"title": {
+															"type": "string",
+															"description": "accept: short label of the request, ≤200 chars"
+														},
+														"name": {
+															"type": "string",
+															"description": "accept: short English name, becomes the ticket id"
+														},
+														"note": {
+															"type": "string",
+															"description": "optional: routing background or a limit the person stated, ≤30 words; never instructions"
+														},
+														"type": {
+															"type": "string",
+															"enum": [
+																"code",
+																"debug",
+																"test",
+																"research",
+																"analysis",
+																"review",
+																"docs",
+																"run"
+															],
+															"description": "accept: picks the worker and its model"
+														},
+														"requirements": {
+															"type": "object",
+															"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
+														},
+														"scope": {
+															"type": "string",
+															"description": "accept: one sentence naming the work allowed; defaults to the title"
+														},
+														"check": {
+															"type": "string",
+															"enum": [
+																"full",
+																"proof",
+																"none"
+															],
+															"description": "accept: check before merge. full: acceptance tests + proof on another model; proof: proof only; none: trivial change. Default full (code, debug), proof (test), none (docs)"
+														},
+														"repo": {
+															"type": "string",
+															"description": "accept: optional project folder (own git repo inside a multi-project workspace), relative to the workspace root; omit when the root is the repo"
+														},
+														"after": {
+															"type": "array",
+															"items": {
+																"type": "string"
+															},
+															"description": "optional: names of entries whose results this one needs; it starts once they ended"
+														}
+													},
+													"required": [
+														"title",
+														"name",
+														"type",
+														"scope"
+													]
+												}
+											}
+										},
+										"required": [
+											"kind",
+											"trigger_id"
+										]
 									}
 								}
 							},
-							"description": "set: the full rule list"
-						},
-						"allowed": {
-							"type": "array",
-							"items": {
-								"type": "string"
-							},
-							"description": "set: sender ids allowed to request work (default [\"person\"])"
-						},
-						"admission": {
-							"type": "object",
-							"description": "set: { listedUnaddressed: inferred|ignore, unlistedAddressed: explicit|inferred|ignore, unlistedUnaddressed: inferred|ignore }"
-						},
-						"proofRounds": {
-							"type": "integer",
-							"description": "set: failed proof rounds before the person decides, 0–6 (default 3); 0 turns checks off"
-						},
-						"maxWorkers": {
-							"type": "integer",
-							"description": "set: concurrent worker turns, 1–8 (default 6)"
-						},
-						"evalTimeoutSeconds": {
-							"type": "integer",
-							"description": "set: seconds a candidate waits for a decision, 30–3600 (default 120)"
-						},
-						"paused": {
-							"type": "boolean",
-							"description": "set: pause processing; messages are still recorded"
-						},
-						"isolation": {
-							"type": "string",
-							"enum": [
-								"auto",
-								"worktree",
-								"serial"
+							"required": [
+								"decisions"
 							],
-							"description": "set: writers in git worktrees once git is confirmed (auto, default), from the start (worktree), or one at a time (serial)"
+							"description": "decide explicit candidate cards: accept (one ticket, or tickets[] per named part), attach, stop or ignore; items are independent."
 						},
-						"roleModels": {
+						"eval_decide": {
 							"type": "object",
-							"description": "set: { taskType: [model, fallback, …] }; [] removes a pin"
-						},
-						"profiles": {
-							"type": "object",
-							"description": "set: { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision|reasoningModel|unstable: bool, thinking: [levels] } }; null removes"
-						},
-						"exclude": {
-							"type": "array",
-							"items": {
-								"type": "string"
-							},
-							"description": "set: model id globs never to use"
-						},
-						"include": {
-							"type": "array",
-							"items": {
-								"type": "string"
-							},
-							"description": "set: exclusion globs to remove"
-						},
-						"excludeThinking": {
-							"type": "array",
-							"items": {
-								"type": "string",
-								"enum": [
-									"off",
-									"minimal",
-									"low",
-									"medium",
-									"high",
-									"xhigh",
-									"max"
-								]
-							},
-							"description": "set: thinking levels workers never get (default [\"high\", \"xhigh\", \"max\"]; [] allows all)"
-						},
-						"notes": {
-							"type": "array",
-							"items": {
-								"type": "string"
-							}
-						},
-						"team": {
-							"type": "object",
-							"description": "set: { communication|scope|delivery: text }; \"\" restores the default"
-						},
-						"show": {
-							"type": "array",
-							"items": {
-								"type": "string"
-							},
-							"description": "get: team sections to return in full"
-						},
-						"clear": {
-							"type": "boolean",
-							"description": "set: reset role models, overrides, exclusions and notes first"
-						}
-					}
-				}
-			},
-			{
-				"name": "superagent_models",
-				"description": "LLM Superagent: preview the model, fallbacks and thinking level a task type and requirements get. Only from the llm-superagent skill.",
-				"risk": "low",
-				"schema": {
-					"type": "object",
-					"properties": {
-						"tasks": {
-							"type": "array",
-							"items": {
-								"type": "object",
-								"properties": {
-									"id": {
-										"type": "string"
-									},
-									"type": {
-										"type": "string",
-										"enum": [
-											"code",
-											"debug",
-											"test",
-											"research",
-											"analysis",
-											"review",
-											"docs",
-											"run"
-										]
-									},
-									"requirements": {
-										"type": "object",
-										"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
-									}
+							"properties": {
+								"trigger_id": {
+									"type": "string"
 								},
-								"required": [
-									"type"
-								]
-							}
-						},
-						"explain": {
-							"type": "boolean",
-							"description": "also return the top 5 candidates with scores"
-						}
-					},
-					"required": [
-						"tasks"
-					]
-				}
-			},
-			{
-				"name": "superagent_intake",
-				"description": "LLM Superagent: record a person's message verbatim; a thread reply goes to that ticket's worker, anything else returns a candidate card. Only from the llm-superagent skill.",
-				"risk": "low",
-				"schema": {
-					"type": "object",
-					"properties": {
-						"text": {
-							"type": "string",
-							"description": "The person's message, verbatim"
-						},
-						"addressed": {
-							"type": "boolean",
-							"description": "false for shared material, an aside or thinking aloud; default true"
-						},
-						"thread": {
-							"type": "string",
-							"description": "only when the message replies within an existing thread: its key"
-						}
-					},
-					"required": [
-						"text"
-					]
-				}
-			},
-			{
-				"name": "superagent_route",
-				"description": "LLM Superagent: decide explicit candidate cards: accept (one ticket, or tickets[] per named part), attach, stop or ignore; items are independent. Only from the llm-superagent skill.",
-				"risk": "low",
-				"schema": {
-					"type": "object",
-					"properties": {
-						"decisions": {
-							"type": "array",
-							"items": {
-								"type": "object",
-								"properties": {
-									"kind": {
-										"type": "string",
-										"enum": [
-											"accept",
-											"attach",
-											"stop",
-											"ignore"
-										]
-									},
-									"trigger_id": {
-										"type": "string",
-										"description": "the card's trigger_id (a follow-up's for stop)"
-									},
-									"ticket_id": {
-										"type": "string",
-										"description": "attach and stop: the ticket"
-									},
-									"reason": {
-										"type": "string",
-										"description": "ignore and stop: why, at most 500 characters"
-									},
-									"title": {
-										"type": "string",
-										"description": "accept: short label of the request, ≤200 chars"
-									},
-									"name": {
-										"type": "string",
-										"description": "accept: short English name, becomes the ticket id"
-									},
-									"acknowledgement": {
-										"type": "string",
-										"description": "accept: one sentence in the person's language naming the concrete change and result, ≤100 words"
-									},
-									"note": {
-										"type": "string",
-										"description": "optional: routing background or a limit the person stated, ≤30 words; never instructions"
-									},
-									"type": {
-										"type": "string",
-										"enum": [
-											"code",
-											"debug",
-											"test",
-											"research",
-											"analysis",
-											"review",
-											"docs",
-											"run"
-										],
-										"description": "accept: picks the worker and its model"
-									},
-									"requirements": {
+								"decision": {
+									"type": "string",
+									"enum": [
+										"accept",
+										"ignore",
+										"unavailable"
+									]
+								},
+								"rule_assessments": {
+									"type": "array",
+									"items": {
 										"type": "object",
-										"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
-									},
-									"scope": {
-										"type": "string",
-										"description": "accept: one sentence naming the work allowed; defaults to the title"
-									},
-									"check": {
-										"type": "string",
-										"enum": [
-											"full",
-											"proof",
-											"none"
-										],
-										"description": "accept: check before merge. full: acceptance tests + proof on another model; proof: proof only; none: trivial change. Default full (code, debug), proof (test), none (docs)"
-									},
-									"repo": {
-										"type": "string",
-										"description": "accept: optional project folder (own git repo inside a multi-project workspace), relative to the workspace root; omit when the root is the repo"
-									},
-									"tickets": {
-										"type": "array",
-										"description": "accept: one entry per part the message names (2–8), run in parallel unless after; the item's acknowledgement covers all",
-										"items": {
-											"type": "object",
-											"properties": {
-												"title": {
-													"type": "string",
-													"description": "accept: short label of the request, ≤200 chars"
-												},
-												"name": {
-													"type": "string",
-													"description": "accept: short English name, becomes the ticket id"
-												},
-												"note": {
-													"type": "string",
-													"description": "optional: routing background or a limit the person stated, ≤30 words; never instructions"
-												},
-												"type": {
-													"type": "string",
-													"enum": [
-														"code",
-														"debug",
-														"test",
-														"research",
-														"analysis",
-														"review",
-														"docs",
-														"run"
-													],
-													"description": "accept: picks the worker and its model"
-												},
-												"requirements": {
-													"type": "object",
-													"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
-												},
-												"scope": {
-													"type": "string",
-													"description": "accept: one sentence naming the work allowed; defaults to the title"
-												},
-												"check": {
-													"type": "string",
-													"enum": [
-														"full",
-														"proof",
-														"none"
-													],
-													"description": "accept: check before merge. full: acceptance tests + proof on another model; proof: proof only; none: trivial change. Default full (code, debug), proof (test), none (docs)"
-												},
-												"repo": {
-													"type": "string",
-													"description": "accept: optional project folder (own git repo inside a multi-project workspace), relative to the workspace root; omit when the root is the repo"
-												},
-												"after": {
-													"type": "array",
-													"items": {
-														"type": "string"
-													},
-													"description": "optional: names of entries whose results this one needs; it starts once they ended"
-												}
+										"properties": {
+											"rule_id": {
+												"type": "string"
 											},
-											"required": [
-												"title",
-												"name",
-												"type",
-												"scope"
+											"matched": {
+												"type": "boolean"
+											},
+											"reason": {
+												"type": "string"
+											}
+										}
+									},
+									"description": "Exactly one entry per enabled rule"
+								},
+								"direction": {
+									"type": "object",
+									"properties": {
+										"implementation_requested": {
+											"type": "boolean"
+										},
+										"target_basis": {
+											"type": "string",
+											"enum": [
+												"specified",
+												"existing-standard",
+												"undetermined"
 											]
+										},
+										"requires_design_decision": {
+											"type": "boolean"
+										},
+										"evidence": {
+											"type": "string"
 										}
 									}
 								},
-								"required": [
-									"kind",
-									"trigger_id"
-								]
-							}
-						}
-					},
-					"required": [
-						"decisions"
-					]
-				}
-			},
-			{
-				"name": "superagent_eval_decide",
-				"description": "LLM Superagent: judge an inferred candidate against every enabled rule; accept creates a ticket only in auto mode with a settled direction. Only from the llm-superagent skill.",
-				"risk": "low",
-				"schema": {
-					"type": "object",
-					"properties": {
-						"trigger_id": {
-							"type": "string"
-						},
-						"decision": {
-							"type": "string",
-							"enum": [
-								"accept",
-								"ignore",
-								"unavailable"
-							]
-						},
-						"rule_assessments": {
-							"type": "array",
-							"items": {
-								"type": "object",
-								"properties": {
-									"rule_id": {
-										"type": "string"
-									},
-									"matched": {
-										"type": "boolean"
-									},
-									"reason": {
-										"type": "string"
-									}
-								}
-							},
-							"description": "Exactly one entry per enabled rule"
-						},
-						"direction": {
-							"type": "object",
-							"properties": {
-								"implementation_requested": {
-									"type": "boolean"
+								"intent_evidence": {
+									"type": "string",
+									"description": "accept: the three facts (this project, change wanted, direction settled) with quotes"
 								},
-								"target_basis": {
+								"reason": {
+									"type": "string"
+								},
+								"title": {
+									"type": "string",
+									"description": "accept: short label of the request, ≤200 chars"
+								},
+								"name": {
+									"type": "string",
+									"description": "accept: short English name, becomes the ticket id"
+								},
+								"acknowledgement": {
+									"type": "string",
+									"description": "accept: one sentence in the person's language naming the concrete change and result, ≤100 words"
+								},
+								"note": {
+									"type": "string",
+									"description": "optional: routing background or a limit the person stated, ≤30 words; never instructions"
+								},
+								"type": {
 									"type": "string",
 									"enum": [
-										"specified",
-										"existing-standard",
-										"undetermined"
+										"code",
+										"debug",
+										"test",
+										"research",
+										"analysis",
+										"review",
+										"docs",
+										"run"
+									],
+									"description": "accept: picks the worker and its model"
+								},
+								"requirements": {
+									"type": "object",
+									"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
+								},
+								"scope": {
+									"type": "string",
+									"description": "accept: one sentence naming the work allowed; defaults to the title"
+								},
+								"check": {
+									"type": "string",
+									"enum": [
+										"full",
+										"proof",
+										"none"
+									],
+									"description": "accept: check before merge. full: acceptance tests + proof on another model; proof: proof only; none: trivial change. Default full (code, debug), proof (test), none (docs)"
+								},
+								"repo": {
+									"type": "string",
+									"description": "accept: optional project folder (own git repo inside a multi-project workspace), relative to the workspace root; omit when the root is the repo"
+								}
+							},
+							"required": [
+								"trigger_id",
+								"decision",
+								"rule_assessments",
+								"direction"
+							],
+							"description": "judge an inferred candidate against every enabled rule; accept creates a ticket only in auto mode with a settled direction."
+						},
+						"reply": {
+							"type": "object",
+							"properties": {
+								"purpose": {
+									"type": "string",
+									"enum": [
+										"result",
+										"attention",
+										"answer"
 									]
 								},
-								"requires_design_decision": {
-									"type": "boolean"
-								},
-								"evidence": {
+								"ticket_id": {
 									"type": "string"
+								},
+								"trigger_id": {
+									"type": "string",
+									"description": "answer: the person's question"
+								},
+								"question": {
+									"type": "string",
+									"description": "attention: the ticket's question, exactly"
+								},
+								"text": {
+									"type": "string",
+									"description": "the message, ≤100 words"
 								}
-							}
-						},
-						"intent_evidence": {
-							"type": "string",
-							"description": "accept: the three facts (this project, change wanted, direction settled) with quotes"
-						},
-						"reason": {
-							"type": "string"
-						},
-						"title": {
-							"type": "string",
-							"description": "accept: short label of the request, ≤200 chars"
-						},
-						"name": {
-							"type": "string",
-							"description": "accept: short English name, becomes the ticket id"
-						},
-						"acknowledgement": {
-							"type": "string",
-							"description": "accept: one sentence in the person's language naming the concrete change and result, ≤100 words"
-						},
-						"note": {
-							"type": "string",
-							"description": "optional: routing background or a limit the person stated, ≤30 words; never instructions"
-						},
-						"type": {
-							"type": "string",
-							"enum": [
-								"code",
-								"debug",
-								"test",
-								"research",
-								"analysis",
-								"review",
-								"docs",
-								"run"
+							},
+							"required": [
+								"purpose",
+								"text"
 							],
-							"description": "accept: picks the worker and its model"
-						},
-						"requirements": {
-							"type": "object",
-							"description": "optional: quality low|normal|high|max, speed low|normal|high, budget low|normal|high, context short|normal|long|huge, vision bool, reasoning bool, thinking level, differentFrom [ticket ids], prefer [globs], avoid [globs]"
-						},
-						"scope": {
-							"type": "string",
-							"description": "accept: one sentence naming the work allowed; defaults to the title"
-						},
-						"check": {
-							"type": "string",
-							"enum": [
-								"full",
-								"proof",
-								"none"
-							],
-							"description": "accept: check before merge. full: acceptance tests + proof on another model; proof: proof only; none: trivial change. Default full (code, debug), proof (test), none (docs)"
-						},
-						"repo": {
-							"type": "string",
-							"description": "accept: optional project folder (own git repo inside a multi-project workspace), relative to the workspace root; omit when the root is the repo"
-						}
-					},
-					"required": [
-						"trigger_id",
-						"decision",
-						"rule_assessments",
-						"direction"
-					]
-				}
-			},
-			{
-				"name": "superagent_reply",
-				"description": "LLM Superagent: clear a message to the person before posting: result, attention (the ticket's question, exact) or answer; ≤100 words, never twice. Only from the llm-superagent skill.",
-				"risk": "low",
-				"schema": {
-					"type": "object",
-					"properties": {
-						"purpose": {
-							"type": "string",
-							"enum": [
-								"result",
-								"attention",
-								"answer"
-							]
-						},
-						"ticket_id": {
-							"type": "string"
-						},
-						"trigger_id": {
-							"type": "string",
-							"description": "answer: the person's question"
-						},
-						"question": {
-							"type": "string",
-							"description": "attention: the ticket's question, exactly"
-						},
-						"text": {
-							"type": "string",
-							"description": "the message, ≤100 words"
-						}
-					},
-					"required": [
-						"purpose",
-						"text"
-					]
-				}
-			},
-			{
-				"name": "superagent_ticket",
-				"description": "LLM Superagent: list, read, report (a returned worker turn), retry, recover, status, note, unsubscribe, requeue, dismiss, merge. Only from the llm-superagent skill.",
-				"risk": "low",
-				"schema": {
-					"type": "object",
-					"properties": {
-						"action": {
-							"type": "string",
-							"enum": [
-								"list",
-								"read",
-								"report",
-								"retry",
-								"recover",
-								"status",
-								"note",
-								"unsubscribe",
-								"requeue",
-								"dismiss",
-								"merge"
-							]
+							"description": "clear a message to the person before posting: result, attention (the ticket's question, exact) or answer; ≤100 words, never twice."
 						},
 						"ticket": {
-							"type": "string"
-						},
-						"turn": {
-							"type": "integer",
-							"description": "report: the turn number that returned"
-						},
-						"attempt": {
-							"type": "integer",
-							"description": "report: the launch item's attempt number"
-						},
-						"outcome": {
-							"type": "string",
-							"enum": [
-								"returned",
-								"error"
-							],
-							"description": "report: returned, or failed (error, timeout, limit)"
-						},
-						"error": {
-							"type": "string",
-							"description": "report: the failure text"
-						},
-						"failures": {
-							"type": "string",
-							"description": "report: every `Model … failed (…)` line of the Task result, verbatim, even when the worker then returned"
-						},
-						"text": {
-							"type": "string",
-							"description": "report: the sub-agent's reply (fallback when no report file). note: one fact, ≤100 words"
-						},
-						"model": {
-							"type": "string",
-							"description": "retry: run on this model instead"
-						},
-						"thread": {
-							"type": "string",
-							"description": "unsubscribe: the thread key"
-						},
-						"trigger_id": {
-							"type": "string",
-							"description": "requeue: the message"
-						},
-						"decision": {
-							"type": "string",
-							"description": "dismiss: the unavailable decision id"
+							"type": "object",
+							"properties": {
+								"action": {
+									"type": "string",
+									"enum": [
+										"list",
+										"read",
+										"report",
+										"retry",
+										"recover",
+										"status",
+										"note",
+										"unsubscribe",
+										"requeue",
+										"dismiss",
+										"merge"
+									]
+								},
+								"ticket": {
+									"type": "string"
+								},
+								"turn": {
+									"type": "integer",
+									"description": "report: the turn number that returned"
+								},
+								"attempt": {
+									"type": "integer",
+									"description": "report: the launch item's attempt number"
+								},
+								"outcome": {
+									"type": "string",
+									"enum": [
+										"returned",
+										"error"
+									],
+									"description": "report: returned, or failed (error, timeout, limit)"
+								},
+								"error": {
+									"type": "string",
+									"description": "report: the failure text"
+								},
+								"failures": {
+									"type": "string",
+									"description": "report: every `Model … failed (…)` line of the Task result, verbatim, even when the worker then returned"
+								},
+								"text": {
+									"type": "string",
+									"description": "report: the sub-agent's reply (fallback when no report file). note: one fact, ≤100 words"
+								},
+								"model": {
+									"type": "string",
+									"description": "retry: run on this model instead"
+								},
+								"thread": {
+									"type": "string",
+									"description": "unsubscribe: the thread key"
+								},
+								"trigger_id": {
+									"type": "string",
+									"description": "requeue: the message"
+								},
+								"decision": {
+									"type": "string",
+									"description": "dismiss: the unavailable decision id"
+								}
+							},
+							"description": "list, read, report (a returned worker turn), retry, recover, status, note, unsubscribe, requeue, dismiss, merge."
 						}
 					}
 				}
@@ -661,7 +634,7 @@
 			{
 				"key": "policy",
 				"title": "Policy",
-				"description": "Accept mode (off, observe, auto), rules for proactive work, allowed senders and admission. Edit through the agent (superagent_config) rather than by hand.",
+				"description": "Accept mode (off, observe, auto), rules for proactive work, allowed senders and admission. Edit through the agent (superagent config set) rather than by hand.",
 				"type": "json",
 				"default": {}
 			},

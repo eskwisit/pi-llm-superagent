@@ -15,13 +15,16 @@
  * Every worker runs on a model picked from the models the user enabled for sub-agents
  * (pi.models.list), by the ticket's type of task and its requirements: any provider, any LLM.
  *
- *   superagent_config       policy, slots, pause, role models, trait overrides, team sections
- *   superagent_models       preview model routing
- *   superagent_intake       a person's message -> follow-up fan-out, or a candidate card
- *   superagent_route        accept | attach | stop | ignore for explicit candidates
- *   superagent_eval_decide  rule assessment of a proactive (inferred) candidate
- *   superagent_reply        purpose-checked messages to the person
- *   superagent_ticket       list | read | report | retry | status | note | unsubscribe | requeue | dismiss | merge
+ * One registered tool, `superagent`. Without arguments it is the setup call; with exactly one operation key
+ * it runs that operation (`superagent({ intake: {…} })`):
+ *
+ *   config       policy, slots, pause, role models, trait overrides, team sections
+ *   models       preview model routing
+ *   intake       a person's message -> follow-up fan-out, or a candidate card
+ *   route        accept | attach | stop | ignore for explicit candidates
+ *   eval_decide  rule assessment of a proactive (inferred) candidate
+ *   reply        purpose-checked messages to the person
+ *   ticket       list | read | report | retry | status | note | unsubscribe | requeue | dismiss | merge
  *
  * One message may start several tickets, which run in parallel. Workers that change files never share a checkout:
  * each works in its own git worktree on branch superagent/<ticket>, and a ready branch is queued for a merge ticket
@@ -390,7 +393,7 @@ function routeTask(task, ctx) {
     warnings.push(`${task.id}: every model is excluded or avoided; ignoring avoid patterns`);
     pool = ctx.entries.filter((e) => !matchesAny(e.id, ctx.exclude));
   }
-  if (!pool.length) fail("every model of the catalog is excluded; remove an exclusion with superagent_config");
+  if (!pool.length) fail("every model of the catalog is excluded; remove an exclusion with config set");
   const hard = [
     ["vision", req.vision, (p) => p.vision === true, (p) => p.vision !== false],
     ["context huge", req.context === "huge", (p) => p.context >= 4, null],
@@ -782,7 +785,7 @@ function candidateCard(state, cfg, thread, ev) {
     trigger_id: ev.primary, thread: thread.key, strength: ev.strength, via: ev.basis.via,
     batch: triggers.map((t) => ({ trigger_id: t.id, at: t.at, addressed: !!t.addressed, text: t.text })),
     thread_tickets: tickets, referenced_tickets: referenced, handed_back: handedBack,
-    decide_with: ev.strength === "explicit" ? "superagent_route" : "superagent_eval_decide (or superagent_route ignore when the card clearly touches no enabled rule)",
+    decide_with: ev.strength === "explicit" ? "route" : "eval_decide (or route ignore when the card clearly touches no enabled rule)",
   };
   if (ev.strength === "inferred") {
     card.mode = cfg.policy.mode;
@@ -1217,7 +1220,7 @@ function escalate(state, g, out) {
     delete t.hold;
     if (liveTicket(t) && t.isolation && t.isolation.mode === "worktree") t.merge = { state: "unmerged", at: now() };
   }
-  out.warnings.push(`${g.id}: the work was not proved; its branches stay unmerged until the person decides (superagent_ticket merge, or retry)`);
+  out.warnings.push(`${g.id}: the work was not proved; its branches stay unmerged until the person decides (ticket merge, or retry)`);
 }
 
 /** A proof reported ready: pass sends the work to the merge, fail sends each defect back to its worker. */
@@ -1243,7 +1246,7 @@ function finishProof(state, cfg, p, rep, out) {
   if (g.runs >= cfg.proofRounds) {
     escalate(state, g, out);
     endTicket(state, cfg, p, { by: "executor", outcome: "failed", reason: `still failing after ${g.runs} proof rounds` }, out);
-    return { handoff: { kind: "blocker", summary: `The work still fails its proof after ${g.runs} rounds: ${rep.summary}`, note: `its branches stay unmerged. Tell the person the main defect (report ${(ticketTurns(p).slice(-1)[0] || {}).report}), and offer to merge anyway (superagent_ticket merge) or to retry` }, note: "proof rounds used up" };
+    return { handoff: { kind: "blocker", summary: `The work still fails its proof after ${g.runs} rounds: ${rep.summary}`, note: `its branches stay unmerged. Tell the person the main defect (report ${(ticketTurns(p).slice(-1)[0] || {}).report}), and offer to merge anyway (ticket merge) or to retry` }, note: "proof rounds used up" };
   }
   g.state = "fixing";
   const report = (ticketTurns(p).slice(-1)[0] || {}).report;
@@ -1970,7 +1973,7 @@ async function withState(fn) {
 
 function requireTicket(state, id) {
   const t = state.tickets[str(id).trim()];
-  if (!t) fail(`unknown ticket ${JSON.stringify(id)}; superagent_ticket list shows the tickets`);
+  if (!t) fail(`unknown ticket ${JSON.stringify(id)}; ticket list shows the tickets`);
   return t;
 }
 function requireTrigger(state, id) {
@@ -2477,7 +2480,7 @@ async function superIntake(args) {
     }
     const owners = followupOwners(state, trigger);
     if (owners.length) {
-      out.followUps.push({ trigger_id: trigger.id, thread: thread.key, delivered_to: owners, note: "their workers decide this message; you may only stop that work, with superagent_route kind stop" });
+      out.followUps.push({ trigger_id: trigger.id, thread: thread.key, delivered_to: owners, note: "their workers decide this message; you may only stop that work, with route kind stop" });
       return { trigger_id: trigger.id, thread: thread.key, path: "follow-up" };
     }
     thread.pending.push(trigger.id);
@@ -2517,7 +2520,7 @@ function routeOne(state, cfg, catalog, it, out) {
   if (kind === "stop") return stopOne(state, cfg, it, out);
   const { tr, thread, ev } = evalOf(state, cfg, it.trigger_id, out);
   if (kind === "accept") {
-    if (ev.strength !== "explicit") fail("an inferred candidate needs an assessment: use superagent_eval_decide");
+    if (ev.strength !== "explicit") fail("an inferred candidate needs an assessment: use eval_decide");
     return createTicket(state, cfg, catalog, thread, ev, { ...it, requireAck: true }, out);
   }
   if (kind === "attach") {
@@ -2587,7 +2590,7 @@ async function superEvalDecide(args) {
   return withState(async (state, cfg, out) => {
     if (cfg.paused) fail("processing is paused: assessments wait until it resumes");
     const { thread, ev } = evalOf(state, cfg, a.trigger_id, out);
-    if (ev.strength !== "inferred") fail("this candidate is an explicit request: route it with superagent_route");
+    if (ev.strength !== "inferred") fail("this candidate is an explicit request: route it with route");
     if (!["accept", "ignore", "unavailable"].includes(a.decision)) fail("decision must be accept, ignore or unavailable");
     const enabled = enabledRules(cfg);
     const judged = Array.isArray(a.rule_assessments) ? a.rule_assessments.filter(isObj) : [];
@@ -2898,7 +2901,7 @@ async function superTicket(args) {
 function ticketList(state, cfg) {
   const order = ["person/answer", "person/review", "person/blocked", "person/failed", "working", "working/proof", "working/merge", "working/queued", "idle"];
   const line = (t) => `${t.id} [${stageLabel(t)}] ${t.type} on ${t.model}: ${t.title}${t.attention ? ` · asks: ${t.attention.question}` : ""}`
-    + `${t.merge && t.merge.state === "unmerged" ? ` · branch ${t.isolation.branch} not merged (superagent_ticket merge)` : ""}`
+    + `${t.merge && t.merge.state === "unmerged" ? ` · branch ${t.isolation.branch} not merged (ticket merge)` : ""}`
     + `${afterOpen(state, t).length ? ` · waits for ${afterOpen(state, t).join(", ")}` : ""}`;
   const tickets = Object.values(state.tickets);
   const open = tickets.filter(liveTicket).sort((a, b) => order.indexOf(stageLabel(a)) - order.indexOf(stageLabel(b)));
@@ -3107,7 +3110,7 @@ const TOOLS = [
   },
 ];
 
-/** Install the personas on the first use rather than at load: five idle sub-agent entries in every session's Task tool cost tokens; activation always precedes the first Task. */
+/** Install the personas on the first use rather than at load: idle sub-agent entries in every session's Task tool cost tokens; activation always precedes the first Task. */
 let personasReady = false;
 async function ensurePersonas() {
   if (personasReady) return;
@@ -3124,6 +3127,40 @@ async function ensurePersonas() {
   syncPersonas(exclude, fallbacks);
 }
 
+/** The operation key of each team tool inside the gateway's arguments: `superagent({ intake: {…} })`. */
+const OPS = Object.fromEntries(TOOLS.map((t) => [t.name.replace(/^superagent_/, ""), t]));
+
+/**
+ * The one tool this plugin registers. Called with no operation it installs the workers and returns the
+ * configuration (Setup step 1); with exactly one operation key it runs that team tool. One tool costs one
+ * line in the host's on-demand tool list and one ToolSearch call, where eight cost eight lines and two calls.
+ */
+const GATEWAY = {
+  name: GATEWAY_NAME,
+  description: "LLM Superagent: no arguments = setup; else exactly one operation key. Only from the llm-superagent skill.",
+  risk: "low",
+  schema: {
+    type: "object",
+    properties: Object.fromEntries(TOOLS.map((t) => [t.name.replace(/^superagent_/, ""), { ...t.schema, description: t.description.replace(/^LLM Superagent: /, "").replace(/ Only from the llm-superagent skill\.$/, "") }])),
+  },
+  execute: async (args, ctx) => {
+    const a = isObj(args) ? args : {};
+    const keys = Object.keys(a).filter((k) => a[k] !== undefined && a[k] !== null);
+    if (!keys.length) {
+      await ensurePersonas();
+      const out = await superConfig({ action: "get" });
+      out.operations = `call superagent with exactly one of: ${Object.keys(OPS).map((k) => `{ ${k}: {…} }`).join(", ")}`;
+      return out;
+    }
+    if (keys.length > 1) fail(`one operation per call; got ${keys.join(", ")}`);
+    const tool = OPS[keys[0]];
+    if (!tool) fail(`unknown operation ${keys[0]}; operations are ${Object.keys(OPS).join(", ")}`);
+    if (!isObj(a[keys[0]])) fail(`${keys[0]} must be an object`);
+    if (ctx && typeof ctx.log === "function") ctx.log(`${tool.name} called`);
+    return tool.execute(a[keys[0]], ctx);
+  },
+};
+
 async function registerTool(tool) {
   await pi.agent.registerTool({
     name: tool.name,
@@ -3138,39 +3175,9 @@ async function registerTool(tool) {
   registered.push(tool.name);
 }
 
-/**
- * ToolSearch queries that activate all eight tools, four per query (ToolSearch activates at most four
- * matches per call). Only the first query holds the bare token `superagent` plus `gateway`, which ranks
- * the gateway right after the three tools named in full; every other token names one tool exactly.
- */
-const ACTIVATION_QUERIES = [
-  "superagent gateway superagent_intake superagent_route superagent_ticket",
-  "superagent_reply superagent_config superagent_models superagent_eval_decide",
-];
-
-/** The gateway: the first call in a session installs the workers and returns the configuration (Setup step 1). */
-const GATEWAY = {
-  name: GATEWAY_NAME,
-  description: "LLM Superagent gateway: call first, only from the llm-superagent skill.",
-  risk: "low",
-  schema: { type: "object", properties: {} },
-  execute: async (args, ctx) => {
-    await ensurePersonas();
-    const out = await superConfig({ action: "get" });
-    out.activated = `${TOOLS.map((t) => t.name).join(", ")} are registered; activate any that are not active yet with ToolSearch, one call per query: ${ACTIVATION_QUERIES.map((q) => `"${q}"`).join(", then ")}`;
-    return out;
-  },
-};
-
-/**
- * Register all eight tools at load. The host hands a session's plugin tools to the agent runtime when a
- * prompt starts, so a tool registered during a turn is missing from ToolSearch until the next prompt.
- * Unactivated, each tool costs one line in the host's on-demand tool list.
- */
 async function onLoad() {
   personasReady = false;
   await registerTool(GATEWAY);
-  for (const tool of TOOLS) await registerTool(tool);
 }
 
 async function onUnload() {

@@ -15,7 +15,7 @@ const ROOT = path.join(__dirname, "..");
 const MAIN = path.join(ROOT, "main.js");
 
 // internal names re-exported for the tests; a name that no longer exists comes back undefined
-const INTERNALS = ["GATEWAY", "ACTIVATION_QUERIES",
+const INTERNALS = ["GATEWAY", "OPS",
   "parseCatalog", "inferProfile", "profileOf", "familyOf", "routeTask", "normalizeRequirements", "routingContext",
   "parseReport", "wordCount", "slug", "gate", "revalidate", "policyEffects", "policyVersion", "ticketStage", "waitsForPerson",
   "installPersonas", "removePersonas", "TOOLS", "TASK_TYPES", "AGENTS", "MARKER", "STATE_FILE", "DEFAULT_RULES",
@@ -92,8 +92,13 @@ function fakePi(dirs, { settings = {}, models = [] } = {}) {
       registerTool: async (tool) => { tools.set(tool.name, tool); },
       unregisterTool: async (name) => { unregistered.push(name); tools.delete(name); },
     },
-    /** Call a registered tool the way the host does. */
-    call: (name, args) => tools.get(name).execute(args, { sessionId: "s1", log: () => {} }),
+    /** Call a registered tool the way the host does; `superagent_<op>` goes through the one gateway as `{ op: args }`. */
+    call: (name, args) => {
+      const ctx = { sessionId: "s1", log: () => {} };
+      const op = /^superagent_(\w+)$/.exec(name);
+      if (op && !tools.has(name)) return tools.get("superagent").execute({ [op[1]]: args }, ctx);
+      return tools.get(name).execute(args, ctx);
+    },
   };
   return pi;
 }

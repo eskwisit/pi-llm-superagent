@@ -27,33 +27,38 @@ function setup(settings) {
 }
 
 describe("load and unload", () => {
-  it("registers all eight tools at load; the gateway's first call installs the five worker personas", async () => {
+  it("registers one tool at load; its first call installs the two worker personas and routes every operation", async () => {
     const { pi, main, target, t } = setup();
     await main.onLoad();
-    // the host reads a session's plugin tools when a prompt starts: a tool registered during a turn
-    // is missing from ToolSearch until the next prompt, so every tool must exist before the first call
-    assert.deepEqual([...pi.tools.keys()], ["superagent", "superagent_config", "superagent_models", "superagent_intake", "superagent_route", "superagent_eval_decide", "superagent_reply", "superagent_ticket"]);
+    // one tool: one line in the host's on-demand list, one ToolSearch activation
+    assert.deepEqual([...pi.tools.keys()], ["superagent"]);
     // lazy workers: idle sessions get no Task-tool entries for them
     for (const a of t.AGENTS) assert.ok(!fs.existsSync(path.join(target, `${a}.md`)), a);
     const cfg = await pi.call("superagent", {});
-    assert.equal(pi.tools.size, 8);
+    assert.deepEqual(t.AGENTS, ["superagent-writer", "superagent-reader"]);
     for (const a of t.AGENTS) assert.ok(fs.existsSync(path.join(target, `${a}.md`)), a);
-    assert.match(cfg.activated, /superagent_ticket are registered/);
-    for (const q of t.ACTIVATION_QUERIES) assert.ok(cfg.activated.includes(`"${q}"`), q);
+    assert.match(cfg.operations, /\{ config: \{…\} \}.*\{ ticket: \{…\} \}/);
+    assert.deepEqual(Object.keys(t.OPS), ["config", "models", "intake", "route", "eval_decide", "reply", "ticket"]);
     assert.match(cfg.personas, /installed/);
     assert.equal(cfg.policy.mode, "observe");
     assert.deepEqual(cfg.policy.rules.map((r) => r.id), ["copy", "visual"]);
     assert.deepEqual(cfg.policy.admission, { listedUnaddressed: "inferred", unlistedAddressed: "ignore", unlistedUnaddressed: "ignore" });
+    // dispatch: exactly one operation key, each an object
+    await assert.rejects(pi.call("superagent", { intake: { text: "x" }, ticket: {} }), /one operation per call/);
+    await assert.rejects(pi.call("superagent", { nope: {} }), /unknown operation nope/);
+    await assert.rejects(pi.call("superagent", { ticket: "list" }), /ticket must be an object/);
+    const list = await pi.call("superagent", { ticket: { action: "list" } });
+    assert.equal(list.slots, "0/6 running");
   });
 
   it("removes its personas on unload but keeps one the user edited", async () => {
     const { pi, main, target } = setup();
     await main.onLoad();
     await pi.call("superagent", {});
-    fs.appendFileSync(path.join(target, "superagent-docs.md"), "\nmy edit\n");
+    fs.appendFileSync(path.join(target, "superagent-reader.md"), "\nmy edit\n");
     await main.onUnload();
-    assert.ok(!fs.existsSync(path.join(target, "superagent-code.md")));
-    assert.ok(fs.existsSync(path.join(target, "superagent-docs.md")));
+    assert.ok(!fs.existsSync(path.join(target, "superagent-writer.md")));
+    assert.ok(fs.existsSync(path.join(target, "superagent-reader.md")));
   });
 
   it("installs the workers with thinking levels that excludeThinking allows, and rewrites them when it changes", async () => {
@@ -62,24 +67,23 @@ describe("load and unload", () => {
     await main.onLoad();
     await pi.call("superagent", {});
     // the Task tool takes no thinking level: the definition's thinkingLevel is the one the worker runs at
-    for (const a of ["superagent-code", "superagent-analysis", "superagent-review", "superagent-research"]) assert.equal(level(a), "medium", a);
-    assert.equal(level("superagent-docs"), "low");
+    for (const a of ["superagent-writer", "superagent-reader"]) assert.equal(level(a), "medium", a);
     const out = await pi.call("superagent_config", { action: "set", excludeThinking: ["max"] });
-    assert.match(out.personas, /installed or updated: .*superagent-code\.md/);
-    assert.equal(level("superagent-code"), "high");
+    assert.match(out.personas, /installed or updated: .*superagent-writer\.md/);
+    assert.equal(level("superagent-writer"), "high");
     await pi.call("superagent_config", { action: "set", excludeThinking: ["low", "medium", "high", "xhigh", "max"] });
-    assert.equal(level("superagent-docs"), "minimal");
-    assert.equal(level("superagent-code"), "minimal");
+    assert.equal(level("superagent-reader"), "minimal");
+    assert.equal(level("superagent-writer"), "minimal");
     // a rewritten thinking level is not a user edit: unload still removes the file
     await main.onUnload();
-    assert.ok(!fs.existsSync(path.join(target, "superagent-code.md")));
+    assert.ok(!fs.existsSync(path.join(target, "superagent-writer.md")));
   });
 
   it("installs the workers with the stored excludeThinking on the first call", async () => {
     const { pi, main, target } = setup({ excludeThinking: [] });
     await main.onLoad();
     await pi.call("superagent", {});
-    assert.equal(frontmatter(fs.readFileSync(path.join(target, "superagent-code.md"), "utf8")).fields.thinkinglevel, "high");
+    assert.equal(frontmatter(fs.readFileSync(path.join(target, "superagent-writer.md"), "utf8")).fields.thinkinglevel, "high");
   });
 
   it("drops the worker-* and superagent-worker-* copies older releases installed, but leaves files it did not write", async () => {
@@ -116,44 +120,31 @@ describe("load and unload", () => {
 });
 
 describe("manifest, personas, prompts", () => {
-  it("declares exactly the tools the code registers, with the same schemas and the models.list permission", () => {
+  it("declares exactly the one tool the code registers, with the same schema and the models.list permission", () => {
     const { t } = setup();
-    const declared = Object.fromEntries(manifest.contributes.agentTools.map((x) => [x.name, x]));
-    const all = [t.GATEWAY, ...t.TOOLS];
-    assert.deepEqual(Object.keys(declared).sort(), all.map((x) => x.name).sort());
-    for (const tool of all) {
-      assert.deepEqual(declared[tool.name].schema, JSON.parse(JSON.stringify(tool.schema)), tool.name);
-      assert.equal(declared[tool.name].description, tool.description);
+    assert.deepEqual(manifest.contributes.agentTools.map((x) => x.name), [t.GATEWAY.name]);
+    const declared = manifest.contributes.agentTools[0];
+    assert.deepEqual(declared.schema, JSON.parse(JSON.stringify(t.GATEWAY.schema)));
+    assert.equal(declared.description, t.GATEWAY.description);
+    // every team tool is one operation key carrying its own schema and description
+    for (const tool of t.TOOLS) {
+      const key = tool.name.replace(/^superagent_/, "");
+      const op = declared.schema.properties[key];
+      assert.ok(op, key);
+      assert.deepEqual(op.properties, JSON.parse(JSON.stringify(tool.schema.properties)), key);
+      assert.ok(!/^LLM Superagent|llm-superagent skill/.test(op.description), key);
     }
     assert.ok(manifest.permissions.includes("models.list"));
     assert.equal(manifest.id, "eskwisit.llm-superagent");
     assert.deepEqual(manifest.fs.write.scope, [".superagent/**"]);
   });
 
-  it("activates all eight tools with the two ToolSearch queries the gateway and the skill give", () => {
+  it("the skill names the one tool and its operations, and no removed tool", () => {
     const { t } = setup();
-    // PI-Desktop's ToolSearch ranking (agent-runtime findDeferredTools): plugin tools are named
-    // plugin_<id>_<name>, a query activates at most four matches, ties keep registration order
-    const catalog = [
-      { name: "Browser", description: "Open a page in the browser panel; a gateway to the web." },
-      ...[t.GATEWAY, ...t.TOOLS].map((x) => ({ name: `plugin_eskwisit_llm_superagent_${x.name}`, description: x.description })),
-    ];
-    const search = (query) => {
-      const n = query.toLowerCase();
-      const words = n.split(/[\s,;|/]+/).filter(Boolean);
-      return catalog.map((tool) => {
-        const o = tool.name.toLowerCase();
-        const d = tool.description.toLowerCase();
-        let score = o === n ? 1e4 : o.includes(n) ? 2e3 : 0;
-        for (const w of words) score += (o.includes(w) ? 300 : 0) + (d.includes(w) ? 25 : 0);
-        return { name: tool.name, score };
-      }).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 4).map((r) => r.name);
-    };
-    const activated = t.ACTIVATION_QUERIES.flatMap(search);
-    assert.deepEqual(activated.sort(), catalog.slice(1).map((x) => x.name).sort());
-    // the skill gives the same queries
-    const skill = fs.readFileSync(path.join(ROOT, "skills", "llm-superagent.md"), "utf8").replace(/\s+/g, " ");
-    for (const q of t.ACTIVATION_QUERIES) assert.ok(skill.includes(`\`${q}\``), q);
+    const skill = fs.readFileSync(path.join(ROOT, "skills", "llm-superagent.md"), "utf8");
+    for (const key of Object.keys(t.OPS)) assert.ok(skill.includes(`\`${key}:`) || skill.includes(`{ ${key}:`), key);
+    assert.ok(!/superagent_(config|models|intake|route|eval_decide|reply|ticket)\b/.test(skill));
+    assert.ok(!/superagent-(code|docs|review|research|analysis)\b/.test(skill));
   });
 
   it("ships one persona per worker, without a model, with the marker and the report contract", () => {
@@ -196,9 +187,17 @@ describe("manifest, personas, prompts", () => {
     assert.match(fs.readFileSync(path.join(ROOT, "LICENSE"), "utf8"), /Apache License\s+Version 2\.0/);
   });
 
-  it("ships the three default team sections", () => {
+  it("ships the three default team sections and a role file for every ticket type that names one", () => {
+    const { t } = setup();
     for (const name of ["communication", "scope", "delivery"]) {
       assert.ok(fs.readFileSync(path.join(ROOT, "prompts", "team", `${name}.md`), "utf8").trim().length > 100, name);
     }
+    const roles = new Set(Object.values(t.TASK_TYPES).map((x) => x.role).filter(Boolean));
+    assert.deepEqual([...roles].sort(), ["analysis", "code", "docs", "research", "review"]);
+    assert.deepEqual(fs.readdirSync(path.join(ROOT, "prompts", "roles")).sort(), [...roles].sort().map((r) => `${r}.md`));
+    for (const r of roles) assert.ok(fs.readFileSync(path.join(ROOT, "prompts", "roles", `${r}.md`), "utf8").trim().length > 100, r);
+    // merge and proof carry their own brief and name no role
+    assert.equal(t.TASK_TYPES.merge.role, undefined);
+    assert.equal(t.TASK_TYPES.proof.role, undefined);
   });
 });
