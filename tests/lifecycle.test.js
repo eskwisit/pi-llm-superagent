@@ -47,10 +47,10 @@ describe("load and unload", () => {
     const { pi, main, target } = setup();
     await main.onLoad();
     await pi.call("superagent", {});
-    fs.appendFileSync(path.join(target, "worker-docs.md"), "\nmy edit\n");
+    fs.appendFileSync(path.join(target, "superagent-docs.md"), "\nmy edit\n");
     await main.onUnload();
-    assert.ok(!fs.existsSync(path.join(target, "worker-code.md")));
-    assert.ok(fs.existsSync(path.join(target, "worker-docs.md")));
+    assert.ok(!fs.existsSync(path.join(target, "superagent-code.md")));
+    assert.ok(fs.existsSync(path.join(target, "superagent-docs.md")));
   });
 
   it("installs the workers with thinking levels that excludeThinking allows, and rewrites them when it changes", async () => {
@@ -59,24 +59,37 @@ describe("load and unload", () => {
     await main.onLoad();
     await pi.call("superagent", {});
     // the Task tool takes no thinking level: the definition's thinkingLevel is the one the worker runs at
-    for (const a of ["worker-code", "worker-analysis", "worker-review", "worker-research"]) assert.equal(level(a), "medium", a);
-    assert.equal(level("worker-docs"), "low");
+    for (const a of ["superagent-code", "superagent-analysis", "superagent-review", "superagent-research"]) assert.equal(level(a), "medium", a);
+    assert.equal(level("superagent-docs"), "low");
     const out = await pi.call("superagent_config", { action: "set", excludeThinking: ["max"] });
-    assert.match(out.personas, /installed or updated: .*worker-code\.md/);
-    assert.equal(level("worker-code"), "high");
+    assert.match(out.personas, /installed or updated: .*superagent-code\.md/);
+    assert.equal(level("superagent-code"), "high");
     await pi.call("superagent_config", { action: "set", excludeThinking: ["low", "medium", "high", "xhigh", "max"] });
-    assert.equal(level("worker-docs"), "minimal");
-    assert.equal(level("worker-code"), "minimal");
+    assert.equal(level("superagent-docs"), "minimal");
+    assert.equal(level("superagent-code"), "minimal");
     // a rewritten thinking level is not a user edit: unload still removes the file
     await main.onUnload();
-    assert.ok(!fs.existsSync(path.join(target, "worker-code.md")));
+    assert.ok(!fs.existsSync(path.join(target, "superagent-code.md")));
   });
 
   it("installs the workers with the stored excludeThinking on the first call", async () => {
     const { pi, main, target } = setup({ excludeThinking: [] });
     await main.onLoad();
     await pi.call("superagent", {});
-    assert.equal(frontmatter(fs.readFileSync(path.join(target, "worker-code.md"), "utf8")).fields.thinkinglevel, "high");
+    assert.equal(frontmatter(fs.readFileSync(path.join(target, "superagent-code.md"), "utf8")).fields.thinkinglevel, "high");
+  });
+
+  it("drops the worker-* and superagent-worker-* copies older releases installed, but leaves files it did not write", async () => {
+    const { pi, main, target, t } = setup();
+    fs.mkdirSync(target, { recursive: true });
+    const ours = `---\nname: x\ndescription: old worker. ${t.MARKER}\n---\n`;
+    for (const old of ["worker-code.md", "worker-docs.md", "superagent-worker-review.md"]) fs.writeFileSync(path.join(target, old), ours);
+    fs.writeFileSync(path.join(target, "worker-analysis.md"), "---\nname: worker-analysis\ndescription: my own agent\n---\n");
+    await main.onLoad();
+    await pi.call("superagent", {});
+    for (const old of ["worker-code.md", "worker-docs.md", "superagent-worker-review.md"]) assert.ok(!fs.existsSync(path.join(target, old)), old);
+    assert.ok(fs.existsSync(path.join(target, "worker-analysis.md")));
+    for (const a of t.AGENTS) assert.match(a, /^superagent-/);
   });
 
   it("saves policy, slots, role models and team sections, and validates them", async () => {
