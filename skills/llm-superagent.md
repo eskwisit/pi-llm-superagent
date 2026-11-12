@@ -95,7 +95,10 @@ verbatim. Launch what comes back, then act on `handoff.kind`:
 its `trigger_id` and a short text from its `summary`.
 
 Other `ticket` actions are in the schema (`retry`, `status`, `note`, `unsubscribe`, `requeue`,
-`dismiss`, `merge`). `config: { action: "set" }` only when the person asks.
+`dismiss`, `merge`). `config: { action: "set" }` only when the person asks. `roleModels` only when
+the person names a model for a task type; never pin models to spread load, dodge rate limits or
+"balance" accounts: the plugin rotates accounts on 429 by itself (`cooldown`), and `exclude` is the
+tool for a model that must not run.
 
 ## Never
 
