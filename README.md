@@ -37,14 +37,17 @@ ticket + mandate ─► assignment ─► turns ─► report ─► handoff (re
 
 ## Workers and models
 
+Two sub-agents do every ticket: `superagent-writer` edits files, `superagent-reader` never does.
+The rules of each ticket type travel in the brief, so a worker reads only its own role.
+
 | Type | Worker | The router favours |
 |---|---|---|
-| `code`, `debug`, `test` | `superagent-code` | coding and reasoning (reasoning first for debug) |
-| `research` | `superagent-research` | long context, reasoning, speed |
-| `analysis` | `superagent-analysis` | reasoning, context |
-| `review` | `superagent-review` | reasoning, coding, and another model family than the work it reviews |
-| `docs` | `superagent-docs` | writing |
-| `run` | `superagent-code` | speed and low cost: runs tests, builds or linters in the main checkout and reports |
+| `code`, `debug`, `test` | writer | coding and reasoning (reasoning first for debug) |
+| `research` | reader | long context, reasoning, speed |
+| `analysis` | reader | reasoning, context |
+| `review` | reader | reasoning, coding, and another model family than the work it reviews |
+| `docs` | writer | writing |
+| `run` | writer | speed and low cost: runs tests, builds or linters in the main checkout and reports |
 
 The plugin reads your models itself, through `models.list`, and uses only the ones you enabled
 for sub-agents in **Settings > Models**. It infers each model's traits from its id and
@@ -68,9 +71,9 @@ Workers get at most `medium` thinking by default. The `excludeThinking` setting 
 levels never used (default `high`, `xhigh`, `max`). A higher wanted level goes down to the
 next allowed one. Set it to `[]` to allow all levels. A worker runs at the `thinkingLevel` of
 its sub-agent definition, so the plugin writes the allowed level into the installed
-`superagent-*` files in `~/.agents/subagents` when the `superagent` gateway tool is first called in a session (so idle sessions pay no tokens for them) and after each settings change.
-A changed level applies to new sessions. Copies that older releases installed as `worker-*` or
-`superagent-worker-*` are removed on that first call; an orchestrator session started before the
+`superagent-writer.md` and `superagent-reader.md` in `~/.agents/subagents` when the `superagent` tool is first called in a session (so idle sessions pay no tokens for them) and after each settings change.
+A changed level applies to new sessions. Copies that older releases installed as `worker-*`,
+`superagent-worker-*` or `superagent-code|research|analysis|review|docs` are removed on that first call; an orchestrator session started before the
 update still names the old workers until it restarts.
 
 ## Parallel tickets without collisions
@@ -190,15 +193,16 @@ sentence, and launches the code worker on your strongest coding model. Then:
 
 - File access through the host API is limited to `.superagent/**` in the workspace.
 - `models.list` shows the plugin which models you enabled, never any key.
-- The eight tools are registered at load, so `ToolSearch` finds them in the turn that first
-  needs them (PI-Desktop reads a session's plugin tools when a prompt starts); until activated,
-  each costs one line in the on-demand tool list. The first call of the `superagent` gateway
-  copies the five worker personas with Node `fs` to `~/.agents/subagents`, which
-  is where PI-Desktop loads sub-agents from. Unload removes them, unless you edited them.
+- One tool, `superagent`, is registered at load: one line in the on-demand tool list until
+  `ToolSearch` activates it, one schema afterwards. Called without arguments it is the setup
+  call; with one operation key (`config`, `models`, `intake`, `route`, `eval_decide`, `reply`,
+  `ticket`) it runs that team operation. The setup call copies the two worker personas with
+  Node `fs` to `~/.agents/subagents`, which is where PI-Desktop loads sub-agents from. Unload
+  removes them, unless you edited them.
 - The plugin has no network access and runs no processes. Workers are ordinary PI-Desktop
   sub-agents:
-  - the code and docs workers can edit workspace files;
-  - every worker can run shell commands (the docs worker uses them only for git);
+  - the writer can edit workspace files, the reader cannot;
+  - both can run shell commands (the reader only to read, measure and build a proof worktree);
   - workers that change files create git worktrees under `.superagent/worktrees` and local
     `superagent/<ticket>` branches, and the merge worker removes them after it lands them.
 
