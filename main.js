@@ -82,7 +82,7 @@ const MAX_FALLBACKS = 3;
 const LIMIT_COOLDOWN_MS = 15 * 60 * 1000; // a provider account that hit a limit gets no new launch for this long
 /** The lines the host adds to a sub-agent result when a model failed and it moved on: `Model <key> failed (<CODE>): <message>`. */
 const MODEL_FAILED = /Model (\S+) failed \(([A-Z_]+)\):\s*([^\n]*)/g;
-const GATEWAY_NAME = "superagent"; // the one tool registered at load
+const GATEWAY_NAME = "superagent"; // Setup step 1: installs the workers and returns the configuration
 const NOTE_WORDS = 30; // routing note
 const IM_WORDS = 100; // any message to the person
 const GENERIC_ACK_RE = /^\W*(ok(ay)?|sure|on it|will do|got it|i'?ll (handle|do|take care of) (it|this|that))\W*$/i; // an acknowledgement that names nothing
@@ -3123,34 +3123,39 @@ async function registerTool(tool) {
   registered.push(tool.name);
 }
 
-/** Register the seven team tools and install the workers. Idle sessions carry only the gateway's one-line entry. */
-let toolsReady = false;
-async function activate() {
-  await ensurePersonas();
-  if (!toolsReady) {
-    toolsReady = true;
-    for (const tool of TOOLS) await registerTool(tool);
-  }
-}
+/**
+ * ToolSearch queries that activate all eight tools, four per query (ToolSearch activates at most four
+ * matches per call). Only the first query holds the bare token `superagent` plus `gateway`, which ranks
+ * the gateway right after the three tools named in full; every other token names one tool exactly.
+ */
+const ACTIVATION_QUERIES = [
+  "superagent gateway superagent_intake superagent_route superagent_ticket",
+  "superagent_reply superagent_config superagent_models superagent_eval_decide",
+];
 
-/** The only tool registered at load. Its first call activates the team and returns the configuration (Setup step 1). */
+/** The gateway: the first call in a session installs the workers and returns the configuration (Setup step 1). */
 const GATEWAY = {
   name: GATEWAY_NAME,
   description: "LLM Superagent gateway: call first, only from the llm-superagent skill.",
   risk: "low",
   schema: { type: "object", properties: {} },
   execute: async (args, ctx) => {
-    await activate();
+    await ensurePersonas();
     const out = await superConfig({ action: "get" });
-    out.activated = `${TOOLS.map((t) => t.name).join(", ")} are registered; if they are not active yet, call ToolSearch with "superagent"`;
+    out.activated = `${TOOLS.map((t) => t.name).join(", ")} are registered; activate any that are not active yet with ToolSearch, one call per query: ${ACTIVATION_QUERIES.map((q) => `"${q}"`).join(", then ")}`;
     return out;
   },
 };
 
+/**
+ * Register all eight tools at load. The host hands a session's plugin tools to the agent runtime when a
+ * prompt starts, so a tool registered during a turn is missing from ToolSearch until the next prompt.
+ * Unactivated, each tool costs one line in the host's on-demand tool list.
+ */
 async function onLoad() {
   personasReady = false;
-  toolsReady = false;
   await registerTool(GATEWAY);
+  for (const tool of TOOLS) await registerTool(tool);
 }
 
 async function onUnload() {

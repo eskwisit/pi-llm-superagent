@@ -18,17 +18,19 @@ message  ─► superagent_intake ─┬─► follow-up: goes to the thread's w
 accepted ─► Task per `launch` item ─► superagent_ticket report ─► handoff
 ```
 
-Tools: `superagent` (gateway) registers `superagent_config`, `superagent_models`,
-`superagent_intake`, `superagent_route`, `superagent_eval_decide`, `superagent_reply`,
-`superagent_ticket` (maybe plugin-prefixed; activate with `ToolSearch` `superagent`). Every
+Tools: `superagent` (gateway), `superagent_config`, `superagent_models`, `superagent_intake`,
+`superagent_route`, `superagent_eval_decide`, `superagent_reply`, `superagent_ticket` (maybe
+plugin-prefixed). Activate them with two `ToolSearch` calls, each with this exact query:
+`superagent gateway superagent_intake superagent_route superagent_ticket`, then
+`superagent_reply superagent_config superagent_models superagent_eval_decide`. Every
 response may carry `candidates`, `followUps`,
 `launch`, `stopAgents`, `warnings`: act on them whenever they appear. The tools validate your
 input and explain a refusal; fix and retry.
 
 ## Setup (once per session)
 
-1. Call `superagent` (no arguments): it registers the other tools, installs the workers and
-   returns the configuration. `personas` must say installed; if the `superagent-*` agents
+1. Call `superagent` (no arguments): it installs the workers and returns the configuration.
+   `personas` must say installed; if the `superagent-*` agents
    are then missing from `Task`, ask for a new session and stop. Fix a clearly wrong model trait with
    `set profiles`. Tell the person once about `warnings`. Respect `policy`, `notes`, `roleModels`.
 2. A workspace must be open (state lives in `.superagent/`); otherwise ask for one and stop.
