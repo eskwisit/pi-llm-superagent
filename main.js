@@ -82,6 +82,7 @@ const LIMIT_COOLDOWN_MS = 15 * 60 * 1000; // a provider account that hit a limit
 /** The lines the host adds to a sub-agent result when a model failed and it moved on: `Model <key> failed (<CODE>): <message>`. */
 const MODEL_FAILED = /Model (\S+) failed \(([A-Z_]+)\):\s*([^\n]*)/g;
 const NOTE_WORDS = 30; // routing note
+const GENERIC_ACK_RE = /^\W*(ok(ay)?|sure|on it|will do|got it|i'?ll (handle|do|take care of) (it|this|that))\W*$/i; // an acknowledgement that names nothing
 const IM_WORDS = 100; // any message to the person
 const NOTE_FACT_WORDS = 100; // a note about other work
 const DEFAULT_WORKERS = 6;
@@ -2036,6 +2037,7 @@ function createTicket(state, cfg, catalog, thread, ev, fields, out) {
   resolveAfter(specs, drafts, split);
   if (fields.requireAck && !ack) fail("acknowledgement is required: one short sentence naming the concrete change and its intended result");
   checkWords(ack, IM_WORDS, "the acknowledgement");
+  if (ack && GENERIC_ACK_RE.test(ack)) fail("acknowledgement is generic; name the concrete change and its intended result, e.g. \"On it: renaming the settings button to 'Save'.\"");
   const ids = drafts.map((d) => d.id);
   const made = drafts.map((d) => {
     const { id, type, title, note, req, route, repo } = d;
