@@ -554,3 +554,89 @@ describe("git found by the plugin, and project folders that are their own reposi
     assert.deepEqual(Object.keys(env.state().tickets), []);
   });
 });
+
+describe("run tickets: read-only parts that share the main checkout", () => {
+  const RUN = {
+    kind: "accept", acknowledgement: "On it: running the unit and the integration tests.",
+    tickets: [
+      { title: "Unit tests", name: "unit", type: "run", scope: "run the unit tests" },
+      { title: "Integration tests", name: "integration", type: "run", scope: "run the integration tests" },
+    ],
+  };
+  const readyRun = "state: ready\nsummary: All tests pass.\nhuman_action: none\n---\nRan npm test: 12 passed.";
+
+  it("parts in one folder all start in the same promote, in the main checkout", async () => {
+    const env = await setup({ isolation: "worktree" });
+    const { r, out } = await accept(env, "run all the tests", RUN);
+    assert.equal(r.ok, true, r.error);
+    assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["integration", "unit"]);
+    assert.ok(out.launch.every((x) => x.worktree === undefined && x.agent === "worker-code"));
+  });
+
+  it("has no isolation, no check and no merge; its brief keeps the checkout read-only and artifacts in scratch", async () => {
+    const env = await setup({ isolation: "worktree", proofRounds: 3 });
+    await accept(env, "run the tests", one("tests", "run"));
+    const s = env.state();
+    assert.equal(s.tickets.tests.isolation, undefined);
+    assert.equal(s.tickets.tests.check, undefined);
+    assert.equal(s.checks, undefined);
+    const b = env.brief("tests", 1);
+    assert.match(b, /## Workspace\n\nYou run commands in the main checkout of the workspace, side by side with other `run` workers/);
+    assert.match(b, /read-only: change no file/);
+    assert.match(b, /\$PI_SCRATCH_DIR/);
+    assert.doesNotMatch(b, /^merge: </m);
+    env.report("tests", 1, readyRun);
+    const out = await env.call("ticket", { action: "report", ticket: "tests", turn: 1 });
+    assert.equal(out.stage, "ended/completed");
+    assert.equal(out.handoff.kind, "result");
+    assert.equal(env.state().tickets.merge, undefined);
+  });
+
+  it("a merge waits while a run part reads the checkout, then starts", async () => {
+    const env = await setup({ isolation: "worktree" });
+    await accept(env, "fix", one("fix"));
+    await accept(env, "run the tests", one("tests", "run"));
+    env.report("fix", 1, ready());
+    const r = await env.call("ticket", { action: "report", ticket: "fix", turn: 1 });
+    assert.equal(r.launch, undefined, "the merge would change the checkout under the run");
+    assert.deepEqual(r.queued, ["merge#1"]);
+    env.report("tests", 1, readyRun);
+    const t = await env.call("ticket", { action: "report", ticket: "tests", turn: 1 });
+    assert.equal(t.launch[0].ticket, "merge");
+  });
+
+  it("a run part waits while a merge or a shared-checkout writer runs in its folder", async () => {
+    const env = await setup({ isolation: "worktree" });
+    await accept(env, "fix", one("fix"));
+    env.report("fix", 1, ready());
+    const m = await env.call("ticket", { action: "report", ticket: "fix", turn: 1 });
+    assert.equal(m.launch[0].ticket, "merge");
+    const run = await accept(env, "run the tests", one("tests", "run"));
+    assert.equal(run.out.launch, undefined, "the run waits for the merge");
+    assert.deepEqual(run.out.queued, ["tests#1"]);
+    const other = await accept(env, "look into x", one("look", "research"));
+    assert.equal(other.out.launch[0].ticket, "look", "other read-only workers are not held");
+    env.report("merge", 1, "state: ready\nsummary: fix landed.\nhuman_action: none\n---\n");
+    const done = await env.call("ticket", { action: "report", ticket: "merge", turn: 1 });
+    assert.equal(done.launch[0].ticket, "tests");
+  });
+
+  it("run parts in different project folders do not hold each other's merges", async () => {
+    const env = await setup({ isolation: "worktree" });
+    await accept(env, "fix", { ...one("fix"), repo: "app" });
+    await accept(env, "run the tests", { ...one("tests", "run"), repo: "lib" });
+    env.report("fix", 1, ready());
+    const r = await env.call("ticket", { action: "report", ticket: "fix", turn: 1 });
+    assert.equal(r.launch[0].ticket, "merge");
+  });
+
+  it("a worker may split a test run into run parts", async () => {
+    const env = await setup({ isolation: "worktree" });
+    await accept(env, "run every test suite", one("suites", "run"));
+    assert.match(env.brief("suites", 1), /give each part type `run` and its own slice/);
+    env.report("suites", 1, "state: dropped\nsummary: Split into the api and web suites.\nhuman_action: none\nsplit: api (run): run the apps/api tests; web (run): run the apps/web tests\n---\n");
+    const out = await env.call("ticket", { action: "report", ticket: "suites", turn: 1 });
+    assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["suites-api", "suites-web"]);
+    assert.equal(env.state().tickets["suites-api"].type, "run");
+  });
+});
