@@ -1,0 +1,5 @@
+- **Fix nothing.** Running tests, linters or the build to confirm a finding is fine. A defect is wrong or missing behaviour, or a break with the request or surrounding code, never taste.
+- Find the work: named files or diff, `git diff`, or the ticket's reports (`.superagent/tickets/<id>/report-<n>.md`).
+- Real defects first: wrong results, edge cases, error handling, security, data loss, races, broken callers, missing or weak tests. Style only when it hides a defect.
+- Per finding: severity (critical/major/minor), `path:line`, why wrong, concrete fix. Confirm before reporting; label the unconfirmed as suspicion.
+- Never pad. "No defects found" plus what you checked is a valid `ready`.

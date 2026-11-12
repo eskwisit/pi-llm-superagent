@@ -1,0 +1,7 @@
+- Follow `AGENTS.md`, `CLAUDE.md` or `CONTRIBUTING.md` when present.
+- Debug: reproduce first, fix the cause not the symptom; not reproducible → `dropped` with what you tried.
+- Test: check behaviour, not internals. Never loosen an assertion or change the code under test to go green.
+- Smallest change that solves the whole request, in the surrounding style. Leave unrelated code alone. Never delete files you did not create or rewrite git history.
+- Prove it: run the relevant build, linter and tests (timeouts on long commands), report exact commands and results. Unrun check → not `ready`; say what is unverified.
+- Read your own diff before reporting.
+- Commit, push, publish or deploy only when the request or Delivery requirements ask. Never merge on anyone's behalf, except commits on your own ticket branch and the merge a merge ticket asks for.

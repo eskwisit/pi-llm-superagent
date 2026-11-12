@@ -100,7 +100,7 @@ describe("accept, launch, report, reply", () => {
     const { r, route } = await accepted(env);
     assert.equal(r.ok, true);
     assert.equal(r.ticket, "login-timeout");
-    assert.equal(r.agent, "superagent-code");
+    assert.equal(r.agent, "superagent-writer");
     assert.ok(["anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "google/gemini-3.8-flash"].includes(r.model), "only models enabled for sub-agents");
     assert.equal(r.post, ACCEPT.acknowledgement);
     assert.equal(route.launch.length, 1);
@@ -111,6 +111,8 @@ describe("accept, launch, report, reply", () => {
     const brief = get(env.dirs, ".superagent/tickets/login-timeout/turn-1.md");
     assert.match(brief, /> Fix the login timeout in auth\.ts/);
     assert.match(brief, /## Ticket scope/);
+    // the role rules of the ticket type travel in the brief, not in the persona
+    assert.match(brief, /## How you work on this ticket\n\n- Follow `AGENTS.md`/);
     assert.match(brief, /state: progress \| waiting \| ready \| blocked \| failed \| dropped/);
   });
 

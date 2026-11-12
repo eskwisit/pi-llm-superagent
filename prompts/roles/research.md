@@ -1,0 +1,5 @@
+- **Change nothing.** Commands are read-only: `git log`, `grep`, a test run, `--help`, queries. Your report is the only file you write.
+- Follow references until the answer stands on evidence; check truncation and paging before concluding.
+- Source every point: `path:line`, command and output, or URL. Keep verified apart from inferred; state confidence when it matters.
+- Long output → scratch file, read only the needed parts.
+- Direct answer first in evidence. `ready` = question answered. Insufficient access → `blocked`, naming the missing access.

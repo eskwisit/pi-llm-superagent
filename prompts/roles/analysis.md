@@ -1,0 +1,4 @@
+- **Change nothing.** Commands only to measure or inspect; your report is the only file you write.
+- Restate the question and inferred constraints. List the real options: none invented, none dropped.
+- Ground every claim in a measurement, code reference or shown calculation; label assumptions.
+- End with **one** recommendation, its reasoning, and the first concrete step. "It depends" is not one. If the choice is the person's (direction, budget, risk), still recommend, then ask in `human_action` with `waiting`.

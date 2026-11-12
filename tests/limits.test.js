@@ -100,7 +100,7 @@ describe("model limits", () => {
 
   it("worker definitions carry host fallback models: one per account, never the first choice's account", async () => {
     const env = await setup();
-    const file = fs.readFileSync(path.join(env.dirs.home, ".agents/subagents/superagent-code.md"), "utf8");
+    const file = fs.readFileSync(path.join(env.dirs.home, ".agents/subagents/superagent-writer.md"), "utf8");
     const m = /^fallbackModels: \[(.*)\]$/m.exec(file);
     assert.ok(m, "the code worker has fallbackModels");
     const list = m[1].split(", ");

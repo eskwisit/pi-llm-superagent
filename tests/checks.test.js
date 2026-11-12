@@ -71,7 +71,7 @@ describe("checked tickets", () => {
     const r2 = await env.report("dark-toggle-spec", 1, READY);
     assert.deepEqual(tickets(r2), ["dark-toggle-proof"]);
     const p = r2.launch[0];
-    assert.equal(p.agent, "superagent-review");
+    assert.equal(p.agent, "superagent-reader");
     assert.equal(p.model, "google/gemini-3.8-pro", "another model family than the implementer");
     const pb = env.brief("dark-toggle-proof", 1);
     assert.match(pb, /proof worker/);

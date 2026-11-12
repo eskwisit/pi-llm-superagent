@@ -170,7 +170,7 @@ describe("merge tickets", () => {
     assert.match(r.note, /queued for the merge worker/);
     assert.equal(r.stage, "working/merge");
     assert.equal(r.launch[0].ticket, "merge");
-    assert.equal(r.launch[0].agent, "superagent-code");
+    assert.equal(r.launch[0].agent, "superagent-writer");
     const s = env.state();
     assert.equal(s.tickets.merge.type, "merge");
     assert.deepEqual(s.tickets.merge.merges, ["fix"]);
@@ -570,7 +570,7 @@ describe("run tickets: read-only parts that share the main checkout", () => {
     const { r, out } = await accept(env, "run all the tests", RUN);
     assert.equal(r.ok, true, r.error);
     assert.deepEqual(out.launch.map((x) => x.ticket).sort(), ["integration", "unit"]);
-    assert.ok(out.launch.every((x) => x.worktree === undefined && x.agent === "superagent-code"));
+    assert.ok(out.launch.every((x) => x.worktree === undefined && x.agent === "superagent-writer"));
   });
 
   it("has no isolation, no check and no merge; its brief keeps the checkout read-only and artifacts in scratch", async () => {

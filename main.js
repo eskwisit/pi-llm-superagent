@@ -29,8 +29,9 @@
  * workspace without git, such workers run one at a time in the shared checkout instead.
  *
  * State lives in the workspace under .superagent/ (host pi.fs, manifest scope). node:fs is used
- * only to install the worker personas in ~/.agents/subagents, remove them on unload, and read this
- * plugin's own default team sections. No network access, no process execution.
+ * only to install the two worker personas (superagent-writer, superagent-reader) in ~/.agents/subagents,
+ * remove them on unload, and read this plugin's own default team sections and role rules. No network
+ * access, no process execution.
  */
 
 const fs = require("node:fs");
@@ -44,21 +45,24 @@ const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 /** Thinking levels workers never get unless the person allows them (setting excludeThinking). */
 const DEFAULT_EXCLUDE_THINKING = ["high", "xhigh", "max"];
 
+/** Two sub-agent definitions: the writer edits files, the reader never does. `role` names the prompts/roles/*.md section a ticket's brief carries. */
+const WRITER = "superagent-writer";
+const READER = "superagent-reader";
 const TASK_TYPES = {
-  code: { agent: "superagent-code", weights: { coding: 5, reasoning: 3, context: 2 }, thinking: "medium", about: "implement a change: feature, fix, refactor", writes: true },
-  debug: { agent: "superagent-code", weights: { coding: 4, reasoning: 5, context: 2 }, thinking: "high", about: "find and fix the root cause of a failure", writes: true },
-  test: { agent: "superagent-code", weights: { coding: 4, reasoning: 2, speed: 2, cost: 1 }, thinking: "medium", about: "write or repair tests", writes: true },
-  research: { agent: "superagent-research", weights: { reasoning: 3, context: 4, speed: 2, cost: 1 }, thinking: "medium", about: "investigate code, docs or behaviour and answer with evidence; read-only" },
-  analysis: { agent: "superagent-analysis", weights: { reasoning: 5, context: 3, coding: 1 }, thinking: "high", about: "design, tradeoff, data or root-cause analysis; read-only" },
-  review: { agent: "superagent-review", weights: { reasoning: 5, coding: 3, context: 3 }, thinking: "high", about: "review a change or another ticket's result for defects; read-only" },
-  docs: { agent: "superagent-docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose", writes: true },
-  run: { agent: "superagent-code", weights: { speed: 4, cost: 3, coding: 1 }, thinking: "low", about: "run commands such as tests, builds or linters and report the results; read-only, shares the main checkout" },
-  // internal: started by the plugin, never accepted from a message
-  merge: { agent: "superagent-code", weights: { coding: 4, reasoning: 4, context: 2 }, thinking: "medium", about: "land finished ticket branches in the person's checkout and resolve their conflicts", writes: true, internal: true },
-  spec: { agent: "superagent-code", weights: { coding: 3, reasoning: 2, speed: 2, cost: 3 }, thinking: "low", about: "write the acceptance checklist and tests of a change from its request, apart from its implementation", writes: true, internal: true },
-  proof: { agent: "superagent-review", weights: { reasoning: 3, coding: 3, speed: 1, cost: 3 }, thinking: "medium", about: "check that finished work passes its acceptance tests and fits the request and the codebase, and list its defects; read-only", internal: true },
+  code: { agent: WRITER, role: "code", weights: { coding: 5, reasoning: 3, context: 2 }, thinking: "medium", about: "implement a change: feature, fix, refactor", writes: true },
+  debug: { agent: WRITER, role: "code", weights: { coding: 4, reasoning: 5, context: 2 }, thinking: "high", about: "find and fix the root cause of a failure", writes: true },
+  test: { agent: WRITER, role: "code", weights: { coding: 4, reasoning: 2, speed: 2, cost: 1 }, thinking: "medium", about: "write or repair tests", writes: true },
+  research: { agent: READER, role: "research", weights: { reasoning: 3, context: 4, speed: 2, cost: 1 }, thinking: "medium", about: "investigate code, docs or behaviour and answer with evidence; read-only" },
+  analysis: { agent: READER, role: "analysis", weights: { reasoning: 5, context: 3, coding: 1 }, thinking: "high", about: "design, tradeoff, data or root-cause analysis; read-only" },
+  review: { agent: READER, role: "review", weights: { reasoning: 5, coding: 3, context: 3 }, thinking: "high", about: "review a change or another ticket's result for defects; read-only" },
+  docs: { agent: WRITER, role: "docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose", writes: true },
+  run: { agent: WRITER, role: "code", weights: { speed: 4, cost: 3, coding: 1 }, thinking: "low", about: "run commands such as tests, builds or linters and report the results; read-only, shares the main checkout" },
+  // internal: started by the plugin, never accepted from a message; merge and proof carry their own brief
+  merge: { agent: WRITER, weights: { coding: 4, reasoning: 4, context: 2 }, thinking: "medium", about: "land finished ticket branches in the person's checkout and resolve their conflicts", writes: true, internal: true },
+  spec: { agent: WRITER, role: "code", weights: { coding: 3, reasoning: 2, speed: 2, cost: 3 }, thinking: "low", about: "write the acceptance checklist and tests of a change from its request, apart from its implementation", writes: true, internal: true },
+  proof: { agent: READER, weights: { reasoning: 3, coding: 3, speed: 1, cost: 3 }, thinking: "medium", about: "check that finished work passes its acceptance tests and fits the request and the codebase, and list its defects; read-only", internal: true },
 };
-const AGENTS = [...new Set(Object.values(TASK_TYPES).map((t) => t.agent))];
+const AGENTS = [WRITER, READER];
 /** Task types a decision may accept; `merge` is the plugin's own. */
 const ACCEPT_TYPES = Object.keys(TASK_TYPES).filter((k) => !TASK_TYPES[k].internal);
 /** Ticket types that change files: each runs in its own git worktree, or alone in the shared checkout. */
@@ -479,6 +483,17 @@ const TEAM_TITLES = { communication: "Communication", scope: "Ticket scope", del
 function teamDefault(name) {
   try {
     return fs.readFileSync(path.join(__dirname, "prompts", "team", `${name}.md`), "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+/** The role rules of a ticket type (prompts/roles/<role>.md), as a brief section; merge and proof briefs carry their own. */
+function roleSection(type) {
+  const role = (TASK_TYPES[type] || {}).role;
+  if (!role) return "";
+  try {
+    return `## How you work on this ticket\n\n${fs.readFileSync(path.join(__dirname, "prompts", "roles", `${role}.md`), "utf8").trim()}\n\n`;
   } catch {
     return "";
   }
@@ -1390,7 +1405,7 @@ ${shown.length ? `Everything that reached this ticket after it started, oldest f
 
 ${reports.length ? `Read the latest report before you start, and check the workspace before you repeat any action.\n\n${reports.join("\n")}` : "(none: this is the first turn)"}
 ${a.recovery ? `\n## Recovery note\n\n${a.recovery}\n` : ""}${isolationSection(t)}${branchesSection(state, t)}
-${team}
+${roleSection(t.type)}${team}
 
 ${reportSection(turn, [
   ...(t.isolation && t.isolation.mode === "worktree" ? ["isolation: <worktree | none (you worked in the main checkout)>", "merge: <yes | no when your branch holds no change to land>"] : []),
@@ -1864,9 +1879,9 @@ function installPersonas(exclude = DEFAULT_EXCLUDE_THINKING, fallbacks = {}) {
   fs.mkdirSync(dst, { recursive: true });
   const changed = [];
   // releases 0.15 to 0.19 installed the workers as worker-*.md; drop those copies once
-  // (older superagent-worker-*.md copies match the superagent-* sweep below)
-  for (const name of AGENTS) {
-    const legacy = `${name.replace(/^superagent-/, "worker-")}.md`;
+  // (older superagent-worker-*.md and superagent-code|docs|… copies match the superagent-* sweep below)
+  for (const role of ["code", "research", "analysis", "review", "docs"]) {
+    const legacy = `worker-${role}.md`;
     const file = path.join(dst, legacy);
     try {
       if (fs.readFileSync(file, "utf8").includes(MARKER)) {

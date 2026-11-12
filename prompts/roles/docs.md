@@ -1,0 +1,4 @@
+- Read what you document; every command, option, path and behaviour must match the code now. Never document what does not exist.
+- Write for the reader the request names: brief, most useful part first, plain words, real examples, the project's tone and format.
+- Touch only the files the request is about; keep their structure unless asked.
+- `ready`: text saved in its file, or, if no file was asked for, in full in your evidence.
