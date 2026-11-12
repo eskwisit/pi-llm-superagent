@@ -517,6 +517,7 @@ async function settings() {
   return {
     paused: s.paused === true,
     isolation: ISOLATION.includes(s.isolation) ? s.isolation : "auto",
+    cleanupTickets: s.cleanupTickets === true,
     policy: {
       mode: MODES.includes(policy.mode) ? policy.mode : "observe",
       rules: rules.map((r) => ({ id: str(r.id), name: str(r.name) || str(r.id), enabled: r.enabled !== false, instruction: str(r.instruction).trim() })),
@@ -1961,6 +1962,7 @@ async function withState(fn) {
   await scheduleProofs(state, cfg, out);
   await scheduleMerges(state, cfg, out);
   await promote(state, cfg, out);
+  await cleanupEnded(state, cfg, out);
   // stages as they stand after the launch
   const refresh = (v) => {
     if (isObj(v) && typeof v.stage === "string" && v.ticket && state.tickets[v.ticket]) v.stage = stageLabel(state.tickets[v.ticket]);
@@ -1969,6 +1971,28 @@ async function withState(fn) {
   if (isObj(value) && Array.isArray(value.results)) value.results.forEach(refresh);
   await saveState(state);
   return result(out, value);
+}
+
+/** With cleanupTickets on, remove the briefs and reports of every ticket that ended; a ticket that comes back is cleaned again when it ends again. */
+async function cleanupEnded(state, cfg, out) {
+  for (const t of Object.values(state.tickets)) {
+    if (!t.ended) {
+      delete t.cleaned;
+      continue;
+    }
+    if (!cfg.cleanupTickets || t.cleaned) continue;
+    const dir = ticketDir(t.id);
+    try {
+      const entries = await pi.fs.list(dir);
+      for (const e of entries) if (!e.isDirectory) await pi.fs.remove(e.path);
+      t.cleaned = now();
+      // the empty folder is cosmetic: a host that cannot remove it leaves no file behind
+      if (!entries.some((e) => e.isDirectory)) await pi.fs.remove(dir).catch(() => {});
+    } catch (err) {
+      if (/NOT_FOUND|not found/i.test(str(err && err.message))) t.cleaned = now();
+      else out.warnings.push(`${t.id}: could not clean up ${dir}: ${str(err && err.message) || err}`);
+    }
+  }
 }
 
 function requireTicket(state, id) {
@@ -2313,6 +2337,7 @@ async function superConfig(args) {
       if (!ISOLATION.includes(a.isolation)) fail(`isolation must be one of ${ISOLATION.join(", ")}`);
       patch.isolation = a.isolation;
     }
+    if (a.cleanupTickets !== undefined) patch.cleanupTickets = a.cleanupTickets === true;
     if (a.roleModels !== undefined) {
       if (!isObj(a.roleModels)) fail("roleModels must be { taskType: [model, …] }");
       const pins = { ...(patch.roleModels || before.pins) };
@@ -2396,6 +2421,7 @@ async function superConfig(args) {
       policy: { version: policyVersion(cfg), mode: cfg.policy.mode, rules: cfg.policy.rules, allowed: sourcePart(cfg).allowed, admission: { ...ADMISSION_DEFAULTS, ...sourcePart(cfg).admission[SOURCE] } },
       paused: cfg.paused, maxWorkers: cfg.maxWorkers, evalTimeoutSeconds: cfg.evalTimeoutSeconds, proofRounds: cfg.proofRounds,
       isolation: cfg.isolation,
+      cleanupTickets: cfg.cleanupTickets,
       writers: parallelWriters(cfg, state) ? "in parallel, each in its own git worktree; a merge worker lands their branches"
         : cfg.isolation === "serial" || state.vcs === "none" ? "one at a time in the shared checkout"
           : "one at a time until git is found in the workspace (or a worker confirms it), then in parallel worktrees",
@@ -2961,6 +2987,7 @@ const TOOLS = [
         evalTimeoutSeconds: { type: "integer", description: `set: seconds a candidate waits for a decision, 30–3600 (default ${DEFAULT_EVAL_TIMEOUT})` },
         paused: { type: "boolean", description: "set: pause processing; messages are still recorded" },
         isolation: { type: "string", enum: ISOLATION, description: "set: writers in git worktrees once git is confirmed (auto, default), from the start (worktree), or one at a time (serial)" },
+        cleanupTickets: { type: "boolean", description: "set: remove a ticket's briefs and reports under .superagent/tickets when it ends" },
         roleModels: { type: "object", description: "set: { taskType: [model, fallback, …] }; [] removes a pin" },
         profiles: { type: "object", description: "set: { glob: { reasoning|coding|writing|context|speed|cost: 1-5, vision|reasoningModel|unstable: bool, thinking: [levels] } }; null removes" },
         exclude: { type: "array", items: { type: "string" }, description: "set: model id globs never to use" },
