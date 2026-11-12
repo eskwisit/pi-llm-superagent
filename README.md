@@ -183,6 +183,7 @@ sentence, and launches the code worker on your strongest coding model. Then:
 | `evalTimeoutSeconds` | `120` | how long a candidate waits for a decision |
 | `paused` | `false` | record messages but evaluate, launch and send nothing |
 | `isolation` | `auto` | `auto`, `worktree` or `serial`: how workers that change files avoid collisions |
+| `cleanupTickets` | `false` | trash a ticket's briefs and reports under `.superagent/tickets` once it ends |
 | `roleModels` | `{}` | pinned models per task type |
 | `modelProfiles` | `{}` | corrections to inferred traits |
 | `excludeModels`, `modelNotes` | `[]` | models never used; notes for the orchestrator |
@@ -191,7 +192,8 @@ sentence, and launches the code worker on your strongest coding model. Then:
 
 ## Safety
 
-- File access through the host API is limited to `.superagent/**` in the workspace.
+- File access through the host API is limited to `.superagent/**` in the workspace; deletion
+  (only with `cleanupTickets` on) to `.superagent/tickets/**`, and the files go to the trash.
 - `models.list` shows the plugin which models you enabled, never any key.
 - One tool, `superagent`, is registered at load: one line in the on-demand tool list until
   `ToolSearch` activates it, one schema afterwards. Called without arguments it is the setup
