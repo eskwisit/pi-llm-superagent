@@ -2,7 +2,7 @@
 	"schemaVersion": 1,
 	"id": "eskwisit.llm-superagent",
 	"name": "LLM Superagent",
-	"version": "0.14.0",
+	"version": "0.14.1",
 	"description": "An autonomous team for any LLM: your agent routes each request into a ticket and hands it to a worker sub-agent (code, research, analysis, review, docs) on the model from your list best suited to its type of task and requirements.",
 	"author": "eskwisit",
 	"license": "Apache-2.0",

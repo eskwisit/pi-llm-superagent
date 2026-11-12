@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1
+
+### Bug Fixes
+
+- **main:** link the main checkout dependencies into a worktree (`de619bf`)
+
 ## 0.14.0
 
 ### Features
