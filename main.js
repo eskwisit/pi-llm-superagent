@@ -81,6 +81,7 @@ const MAX_FALLBACKS = 3;
 const LIMIT_COOLDOWN_MS = 15 * 60 * 1000; // a provider account that hit a limit gets no new launch for this long
 /** The lines the host adds to a sub-agent result when a model failed and it moved on: `Model <key> failed (<CODE>): <message>`. */
 const MODEL_FAILED = /Model (\S+) failed \(([A-Z_]+)\):\s*([^\n]*)/g;
+const GATEWAY_NAME = "superagent"; // the one tool registered at load
 const NOTE_WORDS = 30; // routing note
 const GENERIC_ACK_RE = /^\W*(ok(ay)?|sure|on it|will do|got it|i'?ll (handle|do|take care of) (it|this|that))\W*$/i; // an acknowledgement that names nothing
 const IM_WORDS = 100; // any message to the person
@@ -3062,7 +3063,11 @@ const TOOLS = [
   },
 ];
 
-async function onLoad() {
+/** Install the personas on the first use rather than at load: five idle sub-agent entries in every session's Task tool cost tokens; activation always precedes the first Task. */
+let personasReady = false;
+async function ensurePersonas() {
+  if (personasReady) return;
+  personasReady = true;
   let exclude = DEFAULT_EXCLUDE_THINKING;
   let fallbacks = {};
   try {
@@ -3073,19 +3078,50 @@ async function onLoad() {
     // settings unreadable: install with the default exclusions and no fallbacks
   }
   syncPersonas(exclude, fallbacks);
-  for (const tool of TOOLS) {
-    await pi.agent.registerTool({
-      name: tool.name,
-      description: tool.description,
-      risk: tool.risk,
-      schema: tool.schema,
-      execute: (args, ctx) => {
-        if (ctx && typeof ctx.log === "function") ctx.log(`${tool.name} called`);
-        return serial(() => tool.execute(args, ctx));
-      },
-    });
-    registered.push(tool.name);
+}
+
+async function registerTool(tool) {
+  await pi.agent.registerTool({
+    name: tool.name,
+    description: tool.description,
+    risk: tool.risk,
+    schema: tool.schema,
+    execute: async (args, ctx) => {
+      if (ctx && typeof ctx.log === "function") ctx.log(`${tool.name} called`);
+      return serial(() => tool.execute(args, ctx));
+    },
+  });
+  registered.push(tool.name);
+}
+
+/** Register the seven team tools and install the workers. Idle sessions carry only the gateway's one-line entry. */
+let toolsReady = false;
+async function activate() {
+  await ensurePersonas();
+  if (!toolsReady) {
+    toolsReady = true;
+    for (const tool of TOOLS) await registerTool(tool);
   }
+}
+
+/** The only tool registered at load. Its first call activates the team and returns the configuration (Setup step 1). */
+const GATEWAY = {
+  name: GATEWAY_NAME,
+  description: "LLM Superagent gateway: call first, only from the llm-superagent skill.",
+  risk: "low",
+  schema: { type: "object", properties: {} },
+  execute: async (args, ctx) => {
+    await activate();
+    const out = await superConfig({ action: "get" });
+    out.activated = `${TOOLS.map((t) => t.name).join(", ")} are registered; if they are not active yet, call ToolSearch with "superagent"`;
+    return out;
+  },
+};
+
+async function onLoad() {
+  personasReady = false;
+  toolsReady = false;
+  await registerTool(GATEWAY);
 }
 
 async function onUnload() {
