@@ -206,7 +206,8 @@
 											"research",
 											"analysis",
 											"review",
-											"docs"
+											"docs",
+											"run"
 										]
 									},
 									"requirements": {
@@ -312,7 +313,8 @@
 											"research",
 											"analysis",
 											"review",
-											"docs"
+											"docs",
+											"run"
 										],
 										"description": "accept: picks the worker and its model"
 									},
@@ -364,7 +366,8 @@
 														"research",
 														"analysis",
 														"review",
-														"docs"
+														"docs",
+														"run"
 													],
 													"description": "accept: picks the worker and its model"
 												},
@@ -508,7 +511,8 @@
 								"research",
 								"analysis",
 								"review",
-								"docs"
+								"docs",
+								"run"
 							],
 							"description": "accept: picks the worker and its model"
 						},
@@ -699,7 +703,7 @@
 			{
 				"key": "roleModels",
 				"title": "Role models",
-				"description": "Models pinned per task type, { type: [model, fallback, …] }. Types: code, debug, test, research, analysis, review, docs, and the internal merge, spec (acceptance tests) and proof. Empty means picked automatically from your list.",
+				"description": "Models pinned per task type, { type: [model, fallback, …] }. Types: code, debug, test, research, analysis, review, docs, run, and the internal merge, spec (acceptance tests) and proof. Empty means picked automatically from your list.",
 				"type": "json",
 				"default": {}
 			},

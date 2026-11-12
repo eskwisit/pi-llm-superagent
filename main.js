@@ -52,6 +52,7 @@ const TASK_TYPES = {
   analysis: { agent: "worker-analysis", weights: { reasoning: 5, context: 3, coding: 1 }, thinking: "high", about: "design, tradeoff, data or root-cause analysis; read-only" },
   review: { agent: "worker-review", weights: { reasoning: 5, coding: 3, context: 3 }, thinking: "high", about: "review a change or another ticket's result for defects; read-only" },
   docs: { agent: "worker-docs", weights: { writing: 5, reasoning: 2, context: 2 }, thinking: "low", about: "write or update documentation and prose", writes: true },
+  run: { agent: "worker-code", weights: { speed: 4, cost: 3, coding: 1 }, thinking: "low", about: "run commands such as tests, builds or linters and report the results; read-only, shares the main checkout" },
   // internal: started by the plugin, never accepted from a message
   merge: { agent: "worker-code", weights: { coding: 4, reasoning: 4, context: 2 }, thinking: "medium", about: "land finished ticket branches in the person's checkout and resolve their conflicts", writes: true, internal: true },
   spec: { agent: "worker-code", weights: { coding: 3, reasoning: 2, speed: 2, cost: 3 }, thinking: "low", about: "write the acceptance checklist and tests of a change from its request, apart from its implementation", writes: true, internal: true },
@@ -1257,6 +1258,7 @@ async function promote(state, cfg, out) {
   let running = 0;
   let extraUsed = false;
   const held = []; // the folders of exclusive turns that run
+  const reading = []; // the folders of `run` turns that run: they read the main checkout, so nothing may change it under them
   for (const t of Object.values(state.tickets)) {
     if (!liveTicket(t)) continue;
     for (const a of t.assignments) {
@@ -1265,6 +1267,7 @@ async function promote(state, cfg, out) {
           running++;
           if (turn.extra) extraUsed = true;
           if (exclusive(cfg, state, t)) held.push(repoOf(t));
+          if (t.type === "run") reading.push(repoOf(t));
         } else if (turn.state === "pending" && a.state !== "ended") pending.push([t, a, turn]);
       }
     }
@@ -1280,6 +1283,8 @@ async function promote(state, cfg, out) {
     ensureIsolation(state, cfg, t);
     const excl = exclusive(cfg, state, t);
     if (excl && held.some((r) => overlaps(r, repoOf(t)))) continue;
+    if (excl && reading.some((r) => overlaps(r, repoOf(t)))) continue; // a merge or checkout writer waits for running `run` parts
+    if (t.type === "run" && held.some((r) => overlaps(r, repoOf(t)))) continue; // a `run` part waits while a merge or writer changes the checkout
     let extra = false;
     if (running - (extraUsed ? 1 : 0) >= cfg.maxWorkers) {
       if (!turn.priority || extraUsed) continue;
@@ -1288,6 +1293,7 @@ async function promote(state, cfg, out) {
     }
     running++;
     if (excl) held.push(repoOf(t));
+    if (t.type === "run") reading.push(repoOf(t));
     // never start on an account that just hit a limit: each turn is a new Task, so it can move to a healthy model now
     if (a.model && a.model !== "inherit" && cooling(state, a.model)) {
       const next = healthyModel(state, t, a.model);
@@ -1406,6 +1412,7 @@ Before you change anything, judge how far the request reaches. When it covers se
 - Report \`state: dropped\`, a summary that names the parts, and one \`split:\` line with 2 to ${MAX_SPLIT} entries, separated by \`;\`: \`name (type): scope\`. \`name\` is a short slug, \`type\` one of ${ACCEPT_TYPES.join(", ")}, and \`scope\` one sentence that names the part (files, area) the new ticket owns. The scopes do not overlap and together cover the whole request.
 - Give a part its own requirements after its type, as \`key=value\` flags: \`name (docs, quality=low, speed=high): scope\`. Keys: quality (low/normal/high/max), speed (low/normal/high), budget (low/normal/high), context (short/normal/long/huge), reasoning (true/false), vision (true/false). Flags you leave out come from this ticket. Use them so a mechanical part runs cheap and fast, and a subtle one gets reasoning.
 - A part that needs the results of others (a comparison, an integration step): \`name (type) after name1, name2: scope\`. It starts once they ended. At least one part must start now.
+- To split a read-only job such as running tests, builds or linters, give each part type \`run\` and its own slice (a test suite, a package, a file glob). \`run\` parts share the main checkout and run side by side; each writes its artifacts (coverage, build output, logs) to \`$PI_SCRATCH_DIR\`, never into the repository. Do not split a run that takes less than about 2 minutes in total.
 
 Each part becomes a ticket with its own worker, in parallel, on the same request. Split only on this first turn. Do not split a sequence of steps where each needs the one before, or work you can finish well alone: then do the whole ticket yourself.${again}
 `;
@@ -1435,6 +1442,7 @@ function afterSection(state, t) {
 
 /** Where a writer works: its own git worktree and branch, or the shared checkout while no other writer runs there. */
 function isolationSection(t) {
+  if (t.type === "run") return runSection(t);
   const iso = t.isolation;
   if (!iso) return "";
   const repo = iso.repo || "";
@@ -1479,6 +1487,13 @@ ${repo ? `   cd ${repo}\n` : ""}   git rev-parse --is-inside-work-tree   # fails
 5. Before you report \`dropped\`, or \`ready\` with \`merge: no\`, remove your worktree and branch from ${from}: \`git worktree remove --force ${wt}; git branch -D ${iso.branch}; git update-ref -d ${iso.base}\`.
 6. If ${repo ? `\`${repo}/\`` : "the workspace"} is not a git repository, or git cannot make the worktree, work in the main checkout as usual${repo ? `, only under \`${repo}/\`,` : ""} and write \`isolation: none\` in your report.
 `;
+}
+
+/** Where a `run` ticket works: the main checkout, shared with the other `run` parts; no merge or writer changes it meanwhile. */
+function runSection(t) {
+  const repo = repoOf(t);
+  const where = repo ? `the main checkout of the project folder \`${repo}/\` (relative to the workspace root)` : "the main checkout of the workspace";
+  return `\n## Workspace\n\nYou run commands in ${where}, side by side with other \`run\` workers; no merge or worker that changes files there starts while your turn runs. This ticket is read-only: change no file in the checkout, commit nothing, and write every artifact (coverage, build output, logs, temporary files) to \`$PI_SCRATCH_DIR\`, never into the repository. Report the commands you ran and their results.\n`;
 }
 
 /** For read-only workers: the work that sits on ticket branches and is not in the main checkout yet. */

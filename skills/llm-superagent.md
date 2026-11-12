@@ -63,11 +63,12 @@ Batch items, one per `trigger_id`.
 
 | `type` | Worker | For |
 |---|---|---|
-| `code` / `debug` / `test` | worker-code | build or fix / find a root cause / tests |
+| `code` / `debug` / `test` | worker-code | build or fix / find a root cause / write or repair tests |
 | `research` | worker-research | investigate, answer with evidence, no changes |
 | `analysis` | worker-analysis | design, tradeoff, data or incident analysis |
 | `review` | worker-review | review a change or another ticket's result |
 | `docs` | worker-docs | documentation and prose |
+| `run` | worker-code | run tests, builds or linters and report; read-only, shares the main checkout |
 
 `requirements` only when called for: `quality: high|max` (production, security, data, hard bug);
 `quality: low, budget: low` (bulk, trivial); `speed: high` (person waiting, small job); `context:
