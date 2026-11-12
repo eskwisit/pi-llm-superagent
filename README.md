@@ -39,11 +39,11 @@ ticket + mandate ─► assignment ─► turns ─► report ─► handoff (re
 
 | Type | Worker | The router favours |
 |---|---|---|
-| `code`, `debug`, `test` | `superagent-worker-code` | coding and reasoning (reasoning first for debug) |
-| `research` | `superagent-worker-research` | long context, reasoning, speed |
-| `analysis` | `superagent-worker-analysis` | reasoning, context |
-| `review` | `superagent-worker-review` | reasoning, coding, and another model family than the work it reviews |
-| `docs` | `superagent-worker-docs` | writing |
+| `code`, `debug`, `test` | `worker-code` | coding and reasoning (reasoning first for debug) |
+| `research` | `worker-research` | long context, reasoning, speed |
+| `analysis` | `worker-analysis` | reasoning, context |
+| `review` | `worker-review` | reasoning, coding, and another model family than the work it reviews |
+| `docs` | `worker-docs` | writing |
 
 The plugin reads your models itself, through `models.list`, and uses only the ones you enabled
 for sub-agents in **Settings > Models**. It infers each model's traits from its id and
@@ -67,7 +67,7 @@ Workers get at most `medium` thinking by default. The `excludeThinking` setting 
 levels never used (default `high`, `xhigh`, `max`). A higher wanted level goes down to the
 next allowed one. Set it to `[]` to allow all levels. A worker runs at the `thinkingLevel` of
 its sub-agent definition, so the plugin writes the allowed level into the installed
-`superagent-worker-*` files in `~/.agents/subagents` on load and after each settings change.
+`worker-*` files in `~/.agents/subagents` when the `superagent` gateway tool is first called in a session (so idle sessions pay no tokens for them) and after each settings change.
 A changed level applies to new sessions.
 
 ## Parallel tickets without collisions
