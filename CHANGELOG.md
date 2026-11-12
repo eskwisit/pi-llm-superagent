@@ -1,18 +1,27 @@
 # Changelog
 
-## 0.21.0
+## 0.23.0
 
 ### Features
 
-- add the run task type for read-only parts that share the main checkout (`dcc503e`)
-- **subagents:** rename the workers from worker-* to superagent-* (`752433e`)
+- two workers, writer and reader, with the role rules in each brief (`325277e`)
+- one superagent tool with operation keys replaces the eight tools (`d964ab2`)
+
+### Fixes
+
+- register all eight tools at load so ToolSearch finds them (`970c0d7`)
+
+### Performance
+
+- **subagents:** shorten the worker personas by a quarter (`ea6bd8e`)
+- **prompts:** shorten the default team sections (`3e8dfea`)
 
 ### Documentation
 
-- **readme:** describe the run task type (`e9146fe`)
-- **readme:** use the superagent-* worker names (`eee4bdb`)
+- **readme:** describe the eight tools registered at load (`3d5fb79`)
+- **readme:** describe the one tool and the two workers (`0a3f779`)
+- add project memory (`9a37d50`)
 
 ### Tests
 
-- **parallel:** cover run tickets sharing the main checkout (`7f489d1`)
-- use the superagent-* worker names and cover dropping old copies (`15beb51`)
+- **lifecycle:** cover the eight tools at load and the activation queries (`3c9a3dc`)
