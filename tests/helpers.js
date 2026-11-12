@@ -15,7 +15,7 @@ const ROOT = path.join(__dirname, "..");
 const MAIN = path.join(ROOT, "main.js");
 
 // internal names re-exported for the tests; a name that no longer exists comes back undefined
-const INTERNALS = ["GATEWAY", 
+const INTERNALS = ["GATEWAY", "ACTIVATION_QUERIES",
   "parseCatalog", "inferProfile", "profileOf", "familyOf", "routeTask", "normalizeRequirements", "routingContext",
   "parseReport", "wordCount", "slug", "gate", "revalidate", "policyEffects", "policyVersion", "ticketStage", "waitsForPerson",
   "installPersonas", "removePersonas", "TOOLS", "TASK_TYPES", "AGENTS", "MARKER", "STATE_FILE", "DEFAULT_RULES",

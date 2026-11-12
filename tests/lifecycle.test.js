@@ -27,16 +27,19 @@ function setup(settings) {
 }
 
 describe("load and unload", () => {
-  it("registers only the gateway at load; its first call registers the seven tools and installs the five worker personas", async () => {
+  it("registers all eight tools at load; the gateway's first call installs the five worker personas", async () => {
     const { pi, main, target, t } = setup();
     await main.onLoad();
-    // lazy: idle sessions pay one tool line and no Task-tool entries for the workers
+    // the host reads a session's plugin tools when a prompt starts: a tool registered during a turn
+    // is missing from ToolSearch until the next prompt, so every tool must exist before the first call
+    assert.deepEqual([...pi.tools.keys()], ["superagent", "superagent_config", "superagent_models", "superagent_intake", "superagent_route", "superagent_eval_decide", "superagent_reply", "superagent_ticket"]);
+    // lazy workers: idle sessions get no Task-tool entries for them
     for (const a of t.AGENTS) assert.ok(!fs.existsSync(path.join(target, `${a}.md`)), a);
-    assert.deepEqual([...pi.tools.keys()], ["superagent"]);
     const cfg = await pi.call("superagent", {});
-    assert.deepEqual([...pi.tools.keys()].sort(), ["superagent", "superagent_config", "superagent_eval_decide", "superagent_intake", "superagent_models", "superagent_reply", "superagent_route", "superagent_ticket"]);
+    assert.equal(pi.tools.size, 8);
     for (const a of t.AGENTS) assert.ok(fs.existsSync(path.join(target, `${a}.md`)), a);
     assert.match(cfg.activated, /superagent_ticket are registered/);
+    for (const q of t.ACTIVATION_QUERIES) assert.ok(cfg.activated.includes(`"${q}"`), q);
     assert.match(cfg.personas, /installed/);
     assert.equal(cfg.policy.mode, "observe");
     assert.deepEqual(cfg.policy.rules.map((r) => r.id), ["copy", "visual"]);
@@ -125,6 +128,32 @@ describe("manifest, personas, prompts", () => {
     assert.ok(manifest.permissions.includes("models.list"));
     assert.equal(manifest.id, "eskwisit.llm-superagent");
     assert.deepEqual(manifest.fs.write.scope, [".superagent/**"]);
+  });
+
+  it("activates all eight tools with the two ToolSearch queries the gateway and the skill give", () => {
+    const { t } = setup();
+    // PI-Desktop's ToolSearch ranking (agent-runtime findDeferredTools): plugin tools are named
+    // plugin_<id>_<name>, a query activates at most four matches, ties keep registration order
+    const catalog = [
+      { name: "Browser", description: "Open a page in the browser panel; a gateway to the web." },
+      ...[t.GATEWAY, ...t.TOOLS].map((x) => ({ name: `plugin_eskwisit_llm_superagent_${x.name}`, description: x.description })),
+    ];
+    const search = (query) => {
+      const n = query.toLowerCase();
+      const words = n.split(/[\s,;|/]+/).filter(Boolean);
+      return catalog.map((tool) => {
+        const o = tool.name.toLowerCase();
+        const d = tool.description.toLowerCase();
+        let score = o === n ? 1e4 : o.includes(n) ? 2e3 : 0;
+        for (const w of words) score += (o.includes(w) ? 300 : 0) + (d.includes(w) ? 25 : 0);
+        return { name: tool.name, score };
+      }).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 4).map((r) => r.name);
+    };
+    const activated = t.ACTIVATION_QUERIES.flatMap(search);
+    assert.deepEqual(activated.sort(), catalog.slice(1).map((x) => x.name).sort());
+    // the skill gives the same queries
+    const skill = fs.readFileSync(path.join(ROOT, "skills", "llm-superagent.md"), "utf8").replace(/\s+/g, " ");
+    for (const q of t.ACTIVATION_QUERIES) assert.ok(skill.includes(`\`${q}\``), q);
   });
 
   it("ships one persona per worker, without a model, with the marker and the report contract", () => {
