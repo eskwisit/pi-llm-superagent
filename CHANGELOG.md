@@ -1,11 +1,20 @@
 # Changelog
 
-## 0.24.1
+## 0.25.0
 
-### Fixes
+### Features
 
-- **skills:** pin roleModels only when the person names a model, never to spread load (`4377a07`)
+- **extension:** block Task calls that match no running launch item (`adb65e3`)
 
 ### Documentation
 
-- **manifest:** order settings by control type and rewrite the hints in simplified english (`0b31aa4`)
+- **skills:** drop the generic sub-agent rule the guard enforces (`4f6116a`)
+- **readme:** describe the Task guard (`2b97e73`)
+
+### Tests
+
+- **tests:** cover the Task guard (`77d4074`)
+
+### Chores
+
+- update memory (`0d068a7`)
