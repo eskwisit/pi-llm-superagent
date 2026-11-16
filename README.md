@@ -211,6 +211,10 @@ sentence, and launches the code worker on your strongest coding model. Then:
   They do so with the permissions PI-Desktop grants sub-agents. Apart from commits on their own
   ticket branches and the merge into your working tree, they never commit, push, publish or
   merge unless your request or the Delivery requirements say so.
+- While a ticket turn runs, an agent extension guards the host `Task` tool: it blocks a call that
+  hands a ticket to a generic sub-agent (`explorer`, `fixer`, …), launches the wrong worker or
+  model for a running turn, or does not use the launch item's task (the brief). It reads only
+  `.superagent/state.json` and fails open: no state, no running turn or an error allows the call.
 
 ## Development
 
