@@ -71,9 +71,9 @@ Workers get at most `medium` thinking by default. The `excludeThinking` setting 
 levels never used (default `high`, `xhigh`, `max`). A higher wanted level goes down to the
 next allowed one. Set it to `[]` to allow all levels. A worker runs at the `thinkingLevel` of
 its sub-agent definition, so the plugin writes the allowed level into the installed
-`superagent-writer.md` and `superagent-reader.md` in `~/.agents/subagents` when the `superagent` tool is first called in a session (so idle sessions pay no tokens for them) and after each settings change.
+`superagent-writer.md` and `superagent-reader.md` in `~/.agents/subagents` when the plugin loads (a PI-Desktop session reads its sub-agents once, when it starts), on the first `superagent` call and after each settings change.
 A changed level applies to new sessions. Copies that older releases installed as `worker-*`,
-`superagent-worker-*` or `superagent-code|research|analysis|review|docs` are removed on that first call; an orchestrator session started before the
+`superagent-worker-*` or `superagent-code|research|analysis|review|docs` are removed at load; an orchestrator session started before the
 update still names the old workers until it restarts.
 
 ## Parallel tickets without collisions
