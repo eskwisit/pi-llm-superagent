@@ -1,20 +1,16 @@
 # Changelog
 
-## 0.25.0
+## 0.25.1
 
-### Features
+### Fixes
 
-- **extension:** block Task calls that match no running launch item (`adb65e3`)
+- **main:** install the workers at load so new sessions can launch them (`1dde629`)
 
 ### Documentation
 
-- **skills:** drop the generic sub-agent rule the guard enforces (`4f6116a`)
-- **readme:** describe the Task guard (`2b97e73`)
+- **manifest:** state that the workers are installed at load (`0bf2d54`)
+- **readme:** state that the workers are installed at load (`291ae92`)
 
 ### Tests
 
-- **tests:** cover the Task guard (`77d4074`)
-
-### Chores
-
-- update memory (`0d068a7`)
+- **tests:** expect the worker personas installed at load (`96ccbc7`)
