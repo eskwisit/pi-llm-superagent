@@ -32,7 +32,7 @@
  * workspace without git, such workers run one at a time in the shared checkout instead.
  *
  * State lives in the workspace under .superagent/ (host pi.fs, manifest scope). node:fs is used
- * only to install the two worker personas (superagent-writer, superagent-reader) in ~/.agents/subagents,
+ * only to install the two worker personas (superagent-writer, superagent-reader) in ~/.agents/subagents at load,
  * remove them on unload, and read this plugin's own default team sections and role rules. No network
  * access, no process execution.
  */
@@ -3137,11 +3137,8 @@ const TOOLS = [
   },
 ];
 
-/** Install the personas on the first use rather than at load: idle sub-agent entries in every session's Task tool cost tokens; activation always precedes the first Task. */
-let personasReady = false;
-async function ensurePersonas() {
-  if (personasReady) return;
-  personasReady = true;
+/** The persona install inputs: the stored excludeThinking and the fallback models of each worker. */
+async function personaInputs() {
   let exclude = DEFAULT_EXCLUDE_THINKING;
   let fallbacks = {};
   try {
@@ -3151,6 +3148,24 @@ async function ensurePersonas() {
   } catch {
     // settings unreadable: install with the default exclusions and no fallbacks
   }
+  return { exclude, fallbacks };
+}
+
+/**
+ * Install the personas at load. Since PI-Desktop 0.23 a session reads ~/.agents/subagents once, so a
+ * worker installed later (on the first gateway call) is "Unknown subagent" for that whole session.
+ */
+async function installPersonasAtLoad() {
+  const { exclude, fallbacks } = await personaInputs();
+  syncPersonas(exclude, fallbacks);
+}
+
+/** Refresh the personas on the first gateway call of this load (catalog and settings are surely readable by then). */
+let personasReady = false;
+async function ensurePersonas() {
+  if (personasReady) return;
+  personasReady = true;
+  const { exclude, fallbacks } = await personaInputs();
   syncPersonas(exclude, fallbacks);
 }
 
@@ -3205,6 +3220,11 @@ async function registerTool(tool) {
 async function onLoad() {
   personasReady = false;
   await registerTool(GATEWAY);
+  try {
+    await installPersonasAtLoad();
+  } catch {
+    // best effort: the first gateway call installs them again
+  }
 }
 
 async function onUnload() {
