@@ -27,16 +27,15 @@ function setup(settings) {
 }
 
 describe("load and unload", () => {
-  it("registers one tool at load; its first call installs the two worker personas and routes every operation", async () => {
+  it("registers one tool and installs the two worker personas at load; the tool routes every operation", async () => {
     const { pi, main, target, t } = setup();
     await main.onLoad();
     // one tool: one line in the host's on-demand list, one ToolSearch activation
     assert.deepEqual([...pi.tools.keys()], ["superagent"]);
-    // lazy workers: idle sessions get no Task-tool entries for them
-    for (const a of t.AGENTS) assert.ok(!fs.existsSync(path.join(target, `${a}.md`)), a);
-    const cfg = await pi.call("superagent", {});
+    // workers at load: a session reads ~/.agents/subagents once (PI-Desktop 0.23), so a later install is unknown to it
     assert.deepEqual(t.AGENTS, ["superagent-writer", "superagent-reader"]);
     for (const a of t.AGENTS) assert.ok(fs.existsSync(path.join(target, `${a}.md`)), a);
+    const cfg = await pi.call("superagent", {});
     assert.match(cfg.operations, /\{ config: \{…\} \}.*\{ ticket: \{…\} \}/);
     assert.deepEqual(Object.keys(t.OPS), ["config", "models", "intake", "route", "eval_decide", "reply", "ticket"]);
     assert.match(cfg.personas, /installed/);
